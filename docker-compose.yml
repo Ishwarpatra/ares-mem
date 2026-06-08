@@ -1,0 +1,27 @@
+version: '3.8'
+services:
+  semantic_memory:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./chroma_data:/chroma/chroma
+    networks:
+      - ares_net
+
+  agent_orchestrator:
+    build: .
+    environment:
+      - CHROMA_HOST=semantic_memory
+      - CHROMA_PORT=8000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
+    depends_on:
+      - semantic_memory
+    networks:
+      - ares_net
+    command: tail -f /dev/null # Keep alive for manual testing/execution
+
+networks:
+  ares_net:
+    driver: bridge

@@ -1,0 +1,19 @@
+# Orchestration & LLM
+langgraph==0.0.26
+langchain==0.1.12
+langchain-openai==0.1.1
+
+# Vector DB & Embeddings
+chromadb==0.4.24
+sentence-transformers==2.5.1
+
+# Data Processing & ML Features
+numpy==1.26.4
+scikit-learn==1.4.1.post1
+spacy==3.7.4
+
+# Testing & Engineering Standards
+pytest==8.0.2
+black==24.2.0
+python-dotenv==1.0.1
+opensandbox==0.1.8
