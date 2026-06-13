@@ -20,6 +20,7 @@ setup(
         "black==24.2.0",
         "python-dotenv==1.0.1",
         "opensandbox==0.1.8",
+        "google-adk==0.1.0",
     ],
     python_requires=">=3.11",
     entry_points={
