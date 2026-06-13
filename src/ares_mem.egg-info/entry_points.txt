@@ -1,0 +1,2 @@
+[console_scripts]
+ares-test = test_agents:run_test_pipeline

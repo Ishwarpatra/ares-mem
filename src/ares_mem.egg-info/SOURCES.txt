@@ -1,0 +1,7 @@
+setup.py
+src/ares_mem.egg-info/PKG-INFO
+src/ares_mem.egg-info/SOURCES.txt
+src/ares_mem.egg-info/dependency_links.txt
+src/ares_mem.egg-info/entry_points.txt
+src/ares_mem.egg-info/requires.txt
+src/ares_mem.egg-info/top_level.txt
