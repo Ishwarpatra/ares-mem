@@ -115,9 +115,12 @@ def run_ares(log_text: str):
     }
     return ares_app.invoke(initial_state)
 
-if __name__ == "__main__":
+def main():
     test_log = "Suspicious login attempt from unknown IP 10.0.0.5"
     result = run_ares(test_log)
     print("\n--- Final Execution History ---")
     for event in result["history"]:
         print(f"- {event}")
+
+if __name__ == "__main__":
+    main()
