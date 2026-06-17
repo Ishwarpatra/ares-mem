@@ -1,6 +1,7 @@
 from log_ingestion_agent import LogIngestionAgent
 from threat_analysis_agent import ThreatAnalysisAgent
-from decision_response_agents import DecisionAgent, ResponseAgent
+from decision_agents import DecisionAgent
+from response_agents import ResponseAgent
 import json
 
 def run_test_pipeline():
