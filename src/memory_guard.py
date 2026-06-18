@@ -27,7 +27,7 @@ References:
 import math
 import warnings
 import collections
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, cast
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -271,7 +271,7 @@ class MemoryGuard:
         Traces exceeding threshold τ = 0.65 are automatically quarantined.
         """
         v_t = self.encoder.encode([text])
-        sim = cosine_similarity(v_t, self.adv_centroid.reshape(1, -1))
+        sim = cosine_similarity(cast(Any, v_t), cast(Any, self.adv_centroid.reshape(1, -1)))
         return float(sim[0][0])
 
     def calculate_perplexity(self, text: str) -> float:
