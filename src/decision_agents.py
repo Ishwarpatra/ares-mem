@@ -10,7 +10,7 @@ ResponseAgent: Executes the governed decision via simulated infrastructure APIs.
 Design: Both agents are deterministic policy-table driven (no LLM stochasticity).
 """
 import time
-from typing import Any, Dict
+from typing import Any, Dict, cast
 
 from base import BaseAgent
 from models import ThreatAnalysis, Decision, ExecutionResult
@@ -49,7 +49,7 @@ class DecisionAgent(BaseAgent):
         Returns:
             Decision specifying the governed response action.
         """
-        return self.process(threat_analysis)
+        return cast(Decision, self.process(threat_analysis))
 
     def process(self, payload: Any) -> Dict[str, Any]:
         analysis: ThreatAnalysis = payload
@@ -132,7 +132,7 @@ class ResponseAgent(BaseAgent):
         Returns:
             ExecutionResult with action status and timing.
         """
-        return self.process(decision)
+        return cast(ExecutionResult, self.process(decision))
 
     def process(self, payload: Any) -> Dict[str, Any]:
         decision: Decision = payload
