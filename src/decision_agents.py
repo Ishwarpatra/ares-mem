@@ -192,7 +192,16 @@ class ResponseAgent(BaseAgent):
         return "SUCCESS", f"Event recorded for baseline analysis. {decision.get('action')}", target
 
     def _escalate(self, decision: Decision):
-        """Simulate human escalation ticket creation."""
+        """Simulate human escalation ticket creation.
+
+        NOTE: This handler is effectively dead code in the normal pipeline flow.
+        The orchestrator's conditional edge (route_after_decision) intercepts
+        ESCALATE *before* response_node is called, routing directly to
+        human_escalation_node instead. By the time response_node runs, the
+        decision has already been overridden (to QUARANTINE/ALERT by the
+        operator). This method is retained as a direct-call fallback only
+        (e.g., unit tests that invoke ResponseAgent.execute() in isolation).
+        """
         target = "human_review_queue"
         self.logger.info("SIMULATED: Creating human escalation ticket")
         return "PENDING_APPROVAL", f"Escalation ticket created. Awaiting analyst review. {decision.get('action')}", target
