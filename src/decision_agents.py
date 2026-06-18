@@ -102,6 +102,7 @@ class DecisionAgent(BaseAgent):
             "priority": priority,
             "requires_escalation": requires_escalation,
             "rationale": rationale,
+            "source_ip": analysis.get("structured_log", {}).get("source_ip", "0.0.0.0"),
         }
         return result  # type: ignore[return-value]
 
@@ -168,9 +169,7 @@ class ResponseAgent(BaseAgent):
     def _block_ip(self, decision: Decision):
         """Simulate a firewall API call to block a source IP."""
         # In production: call iptables / cloud WAF / Palo Alto API
-        structured = decision.get("rationale", "")
-        # Extract IP mention from rationale for simulation
-        target = "source_ip_extracted_from_state"
+        target = decision.get("source_ip", "0.0.0.0")
         self.logger.info("SIMULATED: iptables -I INPUT -s %s -j DROP", target)
         return "SUCCESS", f"Source IP blocked at firewall layer. Action: {decision.get('action')}", target
 

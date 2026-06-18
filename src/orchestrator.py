@@ -282,12 +282,13 @@ def route_after_decision(state: AgentState) -> str:
 def route_after_escalation(state: AgentState) -> str:
     """
     Routes from 'human_escalation':
-    - If approved and operator_decision is not LOG_ONLY → execute_response
+    - If approved is True and operator_decision is not in ("LOG_ONLY", "ESCALATE") → execute_response
     - Otherwise → secure_memory
     """
     result = state.get("escalation_result", {})
+    approved = result.get("approved", False)
     op_decision = result.get("operator_decision", "ALERT")
-    if op_decision not in ("LOG_ONLY", "ESCALATE"):
+    if approved and op_decision not in ("LOG_ONLY", "ESCALATE"):
         return "execute_response"
     return "secure_memory"
 

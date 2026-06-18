@@ -96,8 +96,8 @@ class TestSemanticDistance:
         """Benign operational text should have LOW similarity to adversarial centroid."""
         text = "Jun 17 sshd: Accepted publickey for devops from 10.0.1.5"
         sim = memory_guard_instance.calculate_semantic_distance(text)
-        # Should be well below the quarantine threshold of 0.65
-        assert sim < 0.65, f"Benign text has unexpectedly high adversarial similarity: {sim}"
+        # Should be well below the quarantine threshold of 0.48
+        assert sim < 0.48, f"Benign text has unexpectedly high adversarial similarity: {sim}"
 
     def test_distance_adversarial_high(self, memory_guard_instance):
         """Direct injection payload should be CLOSE to adversarial centroid."""

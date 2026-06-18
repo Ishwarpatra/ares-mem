@@ -1,5 +1,12 @@
 from setuptools import setup, find_packages
 
+def read_requirements():
+    try:
+        with open("requirements.txt") as f:
+            return [line.strip() for line in f if line.strip() and not line.startswith("#")]
+    except FileNotFoundError:
+        return []
+
 setup(
     name="ares_mem",
     version="0.1.0",
@@ -10,21 +17,7 @@ setup(
     package_dir={"": "src"},
     # Include all files in src
     include_package_data=True,
-    install_requires=[
-        "langgraph>=0.0.26",
-        "langchain>=0.1.12",
-        "langchain-openai>=0.1.1",
-        "chromadb>=0.5.0",
-        "sentence-transformers>=2.5.1",
-        "numpy>=1.26.4",
-        "scikit-learn>=1.4.1.post1",
-        "spacy>=3.7.4",
-        "pytest>=8.0.2",
-        "black>=24.2.0",
-        "python-dotenv>=1.0.1",
-        "opensandbox",
-        "google-adk",
-    ],
+    install_requires=read_requirements(),
     python_requires=">=3.11",
     entry_points={
         "console_scripts": [

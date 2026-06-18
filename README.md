@@ -111,11 +111,12 @@ pytest tests/test_orchestrator.py -v
 ### Expected Results
 
 ```
-tests/test_memory_guard.py      ✓ 18 tests — All feature extraction validated
+tests/test_memory_guard.py      ✓ 25 tests — All feature extraction validated
 tests/test_agents.py            ✓ 37 tests — All agents deterministic
 tests/test_memory_store.py      ✓ 15 tests — ACL routing verified
 tests/test_orchestrator.py      ✓ 13 tests — Full pipeline end-to-end
-tests/test_adversarial_asr.py   ✓ 10 tests — ASR = 0% (0 bypasses)
+tests/test_adversarial_asr.py   ✓ 14 tests — Adversarial ASR testing
+tests/test_evaluation.py        ✓ 29 tests — Evaluation metrics verified
 ```
 
 ---
@@ -126,7 +127,7 @@ tests/test_adversarial_asr.py   ✓ 10 tests — ASR = 0% (0 bypasses)
 
 | Feature | Method | Threshold | Action |
 |---|---|---|---|
-| Semantic Distance | Cosine similarity to 15-seed adversarial centroid | > 0.65 | QUARANTINE |
+| Semantic Distance | Cosine similarity to 15-seed adversarial centroid | > 0.48 | QUARANTINE |
 | Imperative Density | POS-tagging / keyword heuristic | > 0.25 | QUARANTINE |
 | Perplexity | Character-level bigram model | > 2000 | QUARANTINE |
 | Shannon Entropy | Byte-level entropy | > 5.0 | Privilege downgrade |
@@ -143,6 +144,13 @@ tests/test_adversarial_asr.py   ✓ 10 tests — ASR = 0% (0 bypasses)
 
 ```
 ares-mem/
+├── dataset/                       # Synthetic corpus definition & types
+│   ├── corpus_types.py
+│   └── synthetic_corpus.py
+├── eval/                          # Evaluation harness & metrics
+│   ├── metrics.py
+│   ├── run_evaluation.py
+│   └── results/                   # Generated evaluation reports
 ├── src/
 │   ├── base.py                    # BaseAgent abstract class
 │   ├── models.py                  # TypedDicts + THREAT_SIGNATURES
@@ -155,16 +163,15 @@ ares-mem/
 │   ├── memory_store.py            # ChromaDB + ACL retrieval
 │   ├── orchestrator.py            # LangGraph StateGraph
 │   ├── synthetic_logs.py          # Log corpus for testing
-│   ├── main.py                    # Production entry point
-│   ├── google_adk_service.py      # Optional Google ADK integration
-│   └── opensandbox_service.py     # Optional OpenSandbox integration
+│   └── main.py                    # Production entry point
 ├── tests/
 │   ├── conftest.py                # Shared fixtures
 │   ├── test_memory_guard.py       # Feature extraction unit tests
 │   ├── test_agents.py             # Agent unit tests
 │   ├── test_memory_store.py       # ACL and routing tests
 │   ├── test_orchestrator.py       # End-to-end integration tests
-│   └── test_adversarial_asr.py    # Adversarial ASR simulation
+│   ├── test_adversarial_asr.py    # Adversarial ASR simulation
+│   └── test_evaluation.py         # Evaluation module tests
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt

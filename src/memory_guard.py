@@ -14,7 +14,7 @@ Privilege Assignment (5-tier):
   SYSTEM(5) > HIGH(4) > MEDIUM(3) > LOW(2) > UNTRUSTED(1)
 
 Decision Logic:
-  - semantic_distance > 0.65 → UNTRUSTED
+  - semantic_distance > 0.48 → UNTRUSTED
   - imperative_density > 0.25 → UNTRUSTED
   - entropy > 5.0 (very high special char density) → quarantine flag
   - source == 'external' → capped at LOW unless explicitly elevated
@@ -268,7 +268,7 @@ class MemoryGuard:
 
         Sim(v_t, v_adv) = (v_t · v_adv) / (||v_t|| ||v_adv||)
 
-        Traces exceeding threshold τ = 0.65 are automatically quarantined.
+        Traces exceeding threshold τ = 0.48 are automatically quarantined.
         """
         v_t = self.encoder.encode([text])
         sim = cosine_similarity(cast(Any, v_t), cast(Any, self.adv_centroid.reshape(1, -1)))

@@ -18,10 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -m spacy download en_core_web_sm || \
     echo "[WARN] spaCy model not downloaded. Falling back to blank tokenizer."
 
-# Download NLTK punkt tokenizer for perplexity scoring
-RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)" || \
-    echo "[WARN] NLTK punkt not downloaded."
-
 # Copy project source and tests
 COPY src/ ./src/
 COPY tests/ ./tests/

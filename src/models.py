@@ -43,6 +43,7 @@ class Decision(TypedDict, total=False):
     priority: str                   # CRITICAL / HIGH / MEDIUM / LOW
     requires_escalation: bool       # Whether human review is required
     rationale: str                  # Policy reasoning
+    source_ip: str                  # Threat source IP address
 
 
 class ExecutionResult(TypedDict, total=False):
