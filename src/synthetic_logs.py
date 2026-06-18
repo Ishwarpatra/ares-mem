@@ -139,11 +139,13 @@ def get_benign_logs() -> List[Dict[str, Any]]:
 
 
 def get_pipeline_test_logs() -> List[str]:
-    """Returns a curated set of 5 logs spanning all threat categories."""
+    """Returns a curated set of 6 logs spanning all threat categories,
+    including one prompt injection payload to exercise the quarantine gate."""
     return [
         BENIGN_LOGS[0],
         BRUTE_FORCE_LOGS[3],
         PORT_SCAN_LOGS[1],
         DATA_EXFIL_LOGS[0],
         MALWARE_C2_LOGS[0],
+        PROMPT_INJECTION_LOGS[0],   # exercises validation_flag=True → LOG_ONLY path
     ]
