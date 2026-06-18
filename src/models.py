@@ -19,7 +19,7 @@ class StructuredLog(TypedDict, total=False):
     port: int                       # Port number (if applicable)
     protocol: str                   # TCP / UDP / ICMP / etc.
     event_type: str                 # AUTH_FAILURE / PORT_SCAN / CONNECTION / etc.
-    severity: str                   # INFO / LOW / MEDIUM / HIGH / CRITICAL
+    severity: str                   # LOW / MEDIUM / HIGH / CRITICAL (never INFO)
     timestamp: str                  # ISO-8601 timestamp
     summary: str                    # Rule-based natural language summary
     log_format: str                 # SYSLOG / FIREWALL / AUTH / NETFLOW
