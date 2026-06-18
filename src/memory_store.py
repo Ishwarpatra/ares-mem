@@ -16,7 +16,7 @@ Sandboxed Retrieval:
 import os
 import time
 import chromadb
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, cast
 
 from models import PRIVILEGE_LEVELS, MIN_PRIVILEGE_FOR_TASK
 
@@ -194,11 +194,16 @@ class MemoryStore:
         allowed: List[str] = []
         quarantined: List[str] = []
 
-        docs = results.get("documents", [[]])[0]
-        metas = results.get("metadatas", [[]])[0]
+        docs_list = results.get("documents") if results is not None else None
+        metas_list = results.get("metadatas") if results is not None else None
+        
+        docs = docs_list[0] if docs_list is not None and len(docs_list) > 0 else []
+        metas = metas_list[0] if metas_list is not None and len(metas_list) > 0 else []
 
         for doc, meta in zip(docs, metas):
-            mem_priv = int(meta.get("privilege_level", 1))
+            if doc is None or meta is None:
+                continue
+            mem_priv = int(cast(Any, meta.get("privilege_level", 1)))
             if mem_priv >= min_privilege:
                 allowed.append(doc)
             else:
@@ -221,7 +226,11 @@ class MemoryStore:
             include=["documents", "metadatas"]
         )
         samples = []
-        for doc, meta in zip(results.get("documents", []), results.get("metadatas", [])):
+        docs = results.get("documents") or []
+        metas = results.get("metadatas") or []
+        for doc, meta in zip(docs, metas):
+            if doc is None or meta is None:
+                continue
             samples.append({
                 "text_preview": doc[:80] + "..." if len(doc) > 80 else doc,
                 "privilege_label": meta.get("privilege_label", "untrusted"),
