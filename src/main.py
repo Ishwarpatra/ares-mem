@@ -1,10 +1,11 @@
 """
 main.py — ARES-Mem Production Entry Point.
 
-Runs the full LangGraph orchestration pipeline against 5 representative
-synthetic logs spanning all threat categories. Prints a structured
-execution report with per-log latency metrics (satisfying the SOC
-latency documentation requirement from the methodology constraints).
+Runs the full LangGraph orchestration pipeline against 6 representative
+synthetic logs spanning all threat categories (including one prompt injection
+payload to exercise the quarantine gate). Prints a structured execution
+report with per-log latency metrics (satisfying the SOC latency documentation
+requirement from the methodology constraints).
 """
 import os
 import sys
@@ -52,7 +53,8 @@ def run_pipeline(logs: List[str]) -> List[Dict[str, Any]]:
         print(f"  ✔ Complete | Latency: {elapsed_ms:.1f}ms | "
               f"Decision: {result.get('decision', {}).get('decision', 'N/A')} | "
               f"Risk: {result.get('threat_score', 0)} | "
-              f"Quarantined: {result.get('validation_flag', False)}")
+              f"Input quarantined: {result.get('validation_flag', False)} | "
+              f"Trace quarantined: {result.get('trace_validation_flag', False)}")
 
     return results
 
