@@ -12,7 +12,7 @@ Design constraint: deterministic (no LLM calls), runs at SOC velocity.
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, cast
 
 from base import BaseAgent
 from models import StructuredLog, THREAT_SIGNATURES
@@ -49,7 +49,7 @@ class LogIngestionAgent(BaseAgent):
         Returns:
             StructuredLog with all parsed fields populated.
         """
-        return self.process(raw_log)
+        return cast(StructuredLog, self.process(raw_log))
 
     # ── BaseAgent implementation ─────────────────────────────────────────────
 
