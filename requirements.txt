@@ -13,6 +13,9 @@ langchain-core>=0.2.0
 chromadb>=0.5.0,<0.6.0
 sentence-transformers>=2.7.0
 
+# Pydantic v2 required for DecisionSchema.model_dump() in adk_agents
+pydantic>=2.0
+
 # Data Processing & ML Features
 numpy>=1.26.4
 scikit-learn>=1.4.1.post1
