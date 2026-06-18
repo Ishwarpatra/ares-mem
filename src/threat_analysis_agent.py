@@ -10,7 +10,7 @@ Responsibilities:
 Design constraint: deterministic, reproducible scoring (no LLM stochasticity).
 Satisfies the "temperature=0.0" and "n=100 trial" methodology requirements.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 from base import BaseAgent
 from models import StructuredLog, ThreatAnalysis, THREAT_SIGNATURES
@@ -59,7 +59,7 @@ class ThreatAnalysisAgent(BaseAgent):
         Returns:
             ThreatAnalysis with risk score, threat type, confidence, indicators.
         """
-        return self.process(structured_log)
+        return cast(ThreatAnalysis, self.process(structured_log))
 
     # ── BaseAgent implementation ─────────────────────────────────────────────
 
