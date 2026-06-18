@@ -15,9 +15,10 @@ Architecture layers:
 """
 import os
 import operator
-from typing import TypedDict, List, Dict, Any, Optional, Annotated
+from typing import TypedDict, List, Dict, Any, Optional, Annotated, cast
 
 from langgraph.graph import StateGraph, END
+from langgraph.graph.state import CompiledStateGraph
 from dotenv import load_dotenv
 
 # ── Agent Imports ─────────────────────────────────────────────────────────────
@@ -27,6 +28,7 @@ from decision_agents import DecisionAgent, ResponseAgent
 from human_escalation_agent import HumanEscalationAgent
 from memory_guard import MemoryGuard
 from memory_store import MemoryStore
+from models import StructuredLog, ThreatAnalysis, Decision, ExecutionResult
 
 load_dotenv()
 
@@ -46,8 +48,8 @@ class AgentState(TypedDict, total=False):
     raw_log: str                            # Raw log string from data pipeline
 
     # ── Layer 1 outputs ────────────────────────────────────────────────────
-    structured_log: Dict[str, Any]          # Parsed log from LogIngestionAgent
-    threat_analysis: Dict[str, Any]         # Risk score & classification
+    structured_log: StructuredLog          # Parsed log from LogIngestionAgent
+    threat_analysis: ThreatAnalysis         # Risk score & classification
 
     # ── Core state scalars (exposed per architecture spec) ────────────────
     threat_score: int                       # Extracted from threat_analysis.risk_score
@@ -56,8 +58,8 @@ class AgentState(TypedDict, total=False):
     origin_trust_tier: float                # Continuous view of privilege level (0.0-1.0)
 
     # ── Layer 2 outputs ────────────────────────────────────────────────────
-    decision: Dict[str, Any]                # Governed decision from DecisionAgent
-    execution_result: Dict[str, Any]        # Action result from ResponseAgent
+    decision: Decision                      # Governed decision from DecisionAgent
+    execution_result: ExecutionResult        # Action result from ResponseAgent
 
     # ── Layer 3 output (on-demand) ─────────────────────────────────────────
     escalation_result: Dict[str, Any]       # Human escalation outcome
@@ -103,7 +105,8 @@ _store       = MemoryStore()
 def ingestion_node(state: AgentState) -> Dict[str, Any]:
     """Layer 1: Parse raw log into StructuredLog."""
     print("[Node: ingest] Ingesting log...")
-    structured = _ingestor.ingest_log(state["raw_log"])
+    raw_log = cast(str, state.get("raw_log", ""))
+    structured = _ingestor.ingest_log(raw_log)
     return {
         "structured_log": structured,
         "history": [f"[ingest] Structured log: event_type={structured.get('event_type')}, severity={structured.get('severity')}"]
@@ -113,8 +116,9 @@ def ingestion_node(state: AgentState) -> Dict[str, Any]:
 def memory_guard_validation_node(state: AgentState) -> Dict[str, Any]:
     """Layer 1: Validate incoming log trust tier and check for injections."""
     print("[Node: memory_guard_val] Validating raw log...")
+    raw_log = cast(str, state.get("raw_log", ""))
     validated = _guard.validate_and_tag(
-        state["raw_log"],
+        raw_log,
         source="external",
         provenance_hops=1
     )
@@ -135,7 +139,8 @@ def memory_guard_validation_node(state: AgentState) -> Dict[str, Any]:
 def threat_analysis_node(state: AgentState) -> Dict[str, Any]:
     """Layer 1: Score threat and classify."""
     print("[Node: analyze] Analyzing threats...")
-    analysis = _analyst.analyze(state["structured_log"])
+    structured_log = cast(StructuredLog, state.get("structured_log"))
+    analysis = _analyst.analyze(structured_log)
     risk_score = analysis.get("risk_score", 0)
     return {
         "threat_analysis": analysis,
@@ -154,7 +159,7 @@ def decision_node(state: AgentState) -> Dict[str, Any]:
     # CRITICAL GATE: if the Memory Guard quarantined this log (validation_flag is True),
     # force a safe fallback action (LOG_ONLY/no_action) to prevent acting on poisoned content.
     if state.get("validation_flag") is True:
-        decision = {
+        decision: Decision = {
             "decision": "LOG_ONLY",
             "action": "no_action",
             "task_type": "log_analysis",
@@ -169,7 +174,8 @@ def decision_node(state: AgentState) -> Dict[str, Any]:
             ]
         }
 
-    decision = _commander.decide(state["threat_analysis"])
+    threat_analysis = cast(ThreatAnalysis, state.get("threat_analysis"))
+    decision = _commander.decide(threat_analysis)
     return {
         "decision": decision,
         "history":  [f"[decide] decision={decision.get('decision')}, priority={decision.get('priority')}"]
@@ -179,13 +185,15 @@ def decision_node(state: AgentState) -> Dict[str, Any]:
 def human_escalation_node(state: AgentState) -> Dict[str, Any]:
     """Layer 3 (On-Demand): Request human analyst review."""
     print("[Node: escalate] Requesting human oversight...")
+    decision = cast(Decision, state.get("decision"))
+    threat_analysis = cast(ThreatAnalysis, state.get("threat_analysis"))
     result = _overseer.review(
-        decision=state["decision"],
-        threat_context=state["threat_analysis"],
+        decision=decision,
+        threat_context=cast(Dict[str, Any], threat_analysis),
     )
     ticket = result.get("escalation_ticket", {})
     # Override decision with operator's ruling
-    overridden_decision = {**state["decision"], "decision": result.get("operator_decision", "ALERT")}
+    overridden_decision: Decision = cast(Decision, {**cast(dict, state.get("decision", {})), "decision": result.get("operator_decision", "ALERT")})
     return {
         "escalation_result": result,
         "decision":          overridden_decision,
@@ -200,7 +208,8 @@ def human_escalation_node(state: AgentState) -> Dict[str, Any]:
 def response_node(state: AgentState) -> Dict[str, Any]:
     """Layer 2: Execute the governed decision."""
     print("[Node: execute_response] Executing response...")
-    execution = _muscle.execute(state["decision"])
+    decision = cast(Decision, state.get("decision"))
+    execution = _muscle.execute(decision)
     return {
         "execution_result": execution,
         "history": [
@@ -287,9 +296,9 @@ def route_after_escalation(state: AgentState) -> str:
 # 5. Build the State Graph
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_graph() -> StateGraph:
+def build_graph() -> CompiledStateGraph:
     """Constructs and returns the compiled ARES-Mem LangGraph workflow."""
-    workflow = StateGraph(AgentState)
+    workflow = StateGraph(cast(Any, AgentState))
 
     # ── Register Nodes ──────────────────────────────────────────────────────
     workflow.add_node("ingest",            ingestion_node)
