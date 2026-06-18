@@ -22,6 +22,8 @@ from models import StructuredLog, THREAT_SIGNATURES
 _IP_RE = re.compile(
     r"\b(?P<ip>(?:\d{1,3}\.){3}\d{1,3})\b"
 )
+# Plain IP pattern without named group — safe to embed inside other patterns
+_IP_RAW = r"(?:\d{1,3}\.){3}\d{1,3}"
 _PORT_RE = re.compile(r"(?:port|:)\s*(?P<port>\d{2,5})\b", re.IGNORECASE)
 _PROTOCOL_RE = re.compile(r"\b(?P<proto>TCP|UDP|ICMP|HTTP|HTTPS|SSH|FTP|DNS)\b", re.IGNORECASE)
 
@@ -85,24 +87,25 @@ class LogIngestionAgent(BaseAgent):
 
     def _extract_source_ip(self, text: str) -> str:
         """Extract first IP found — assumed to be the source."""
-        # Prefer explicit keywords
+        # Prefer explicit keywords. Use _IP_RAW (no named group) for safe embedding.
         src_pattern = re.search(
-            r"(?:from|src|source|client)[:\s]+(" + _IP_RE.pattern + r")",
+            r"(?:from|src|source|client)[:\s]+(" + _IP_RAW + r")\b",
             text, re.IGNORECASE
         )
         if src_pattern:
-            return src_pattern.group("ip")
+            return src_pattern.group(1)
         match = _IP_RE.search(text)
         return match.group("ip") if match else "0.0.0.0"
 
     def _extract_dest_ip(self, text: str, source_ip: str) -> str:
         """Extract destination IP — second distinct IP in string."""
+        # Use _IP_RAW (no named group) for safe embedding inside other patterns.
         dst_pattern = re.search(
-            r"(?:to|dst|dest|destination|server)[:\s]+(" + _IP_RE.pattern + r")",
+            r"(?:to|dst|dest|destination|server)[:\s]+(" + _IP_RAW + r")\b",
             text, re.IGNORECASE
         )
         if dst_pattern:
-            return dst_pattern.group("ip")
+            return dst_pattern.group(1)
         # Find all IPs and return second one if different
         ips = [m.group("ip") for m in _IP_RE.finditer(text)]
         for ip in ips:
