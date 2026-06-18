@@ -5,17 +5,42 @@ from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass
 
 # Try to import OpenSandbox SDK components
+SandboxSync: Any = None
+ConnectionConfigSync: Any = None
+SandboxException: Any = None
+WriteEntry: Any = None
+
 try:
-    from opensandbox import SandboxSync
-    from opensandbox.config import ConnectionConfigSync
-    from opensandbox.exceptions import SandboxException
-    from opensandbox.models.filesystem import WriteEntry
+    from opensandbox import SandboxSync as _RealSandboxSync # type: ignore
+    from opensandbox.config import ConnectionConfigSync as _RealConnectionConfigSync # type: ignore
+    from opensandbox.exceptions import SandboxException as _RealSandboxException # type: ignore
+    from opensandbox.models.filesystem import WriteEntry as _RealWriteEntry # type: ignore
+    
+    SandboxSync = _RealSandboxSync
+    ConnectionConfigSync = _RealConnectionConfigSync
+    SandboxException = _RealSandboxException
+    WriteEntry = _RealWriteEntry
+    _SDK_INSTALLED = True
 except ImportError:
     # Placeholder for environment where SDK is not yet installed
-    SandboxSync = None
-    ConnectionConfigSync = None
+    _SDK_INSTALLED = False
+    class _FakeSandboxSync:
+        @classmethod
+        def create(cls, *args, **kwargs) -> Any:
+            return Any
+        def __init__(self, *args, **kwargs):
+            pass
+    class _FakeConnectionConfigSync:
+        def __init__(self, *args, **kwargs):
+            pass
+    class _FakeWriteEntry:
+        def __init__(self, *args, **kwargs):
+            pass
+            
+    SandboxSync = _FakeSandboxSync
+    ConnectionConfigSync = _FakeConnectionConfigSync
     SandboxException = Exception
-    WriteEntry = None
+    WriteEntry = _FakeWriteEntry
 
 @dataclass
 class ExecutionResult:
@@ -34,7 +59,7 @@ class OpenSandboxService:
         self.config = ConnectionConfigSync(
             domain=self.domain,
             api_key=self.api_key
-        ) if ConnectionConfigSync else None
+        ) if _SDK_INSTALLED else None
         self.sandbox: Optional[Any] = None
 
     def initialize(self, image: str = "ubuntu:22.04", timeout_min: int = 30) -> str:
@@ -42,7 +67,7 @@ class OpenSandboxService:
         Initializes a new sandbox session.
         """
         try:
-            if not SandboxSync:
+            if not _SDK_INSTALLED:
                 raise RuntimeError("OpenSandbox SDK is not installed.")
             
             self.sandbox = SandboxSync.create(
@@ -50,6 +75,8 @@ class OpenSandboxService:
                 connection_config=self.config,
                 timeout=timedelta(minutes=timeout_min)
             )
+            if self.sandbox is None:
+                raise RuntimeError("Sandbox creation returned None.")
             return self.sandbox.id
         except Exception as e:
             raise RuntimeError(f"Failed to initialize sandbox: {str(e)}")
