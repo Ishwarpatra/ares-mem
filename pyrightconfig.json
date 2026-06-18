@@ -4,5 +4,8 @@
   "extraPaths": [
     "src",
     "."
+  ],
+  "exclude": [
+    "src/adk_agents"
   ]
 }
