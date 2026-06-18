@@ -353,6 +353,7 @@ class MemoryGuard:
 
         # ── Secondary risk factors (soft downgrade) ───────────────────────────
         # entropy > 5.2: genuine anomaly (benign mean 4.6, std 0.16 → 5.2 = ~4σ)
+        reason = f"Source={source}, hops={provenance_hops}, all features within bounds"  # default
         if entropy > 5.2:
             base_level = max(1, base_level - 1)
             reason = f"High entropy {entropy:.2f} + source={source}"
@@ -360,8 +361,6 @@ class MemoryGuard:
             # Moderate similarity: soft downgrade (still passes, but lower trust)
             base_level = max(2, base_level - 1)
             reason = f"Moderate semantic similarity {sem_dist:.3f} + source={source}"
-        else:
-            reason = f"Source={source}, hops={provenance_hops}, all features within bounds"
 
         # Clamp to valid range
         level = max(1, min(5, base_level))
