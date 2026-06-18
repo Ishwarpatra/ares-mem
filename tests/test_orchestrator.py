@@ -14,7 +14,16 @@ from unittest.mock import patch
 # ── Override ChromaDB to use local storage during tests ───────────────────────
 @pytest.fixture(autouse=True)
 def use_local_chroma(tmp_path, monkeypatch):
-    """Patch MemoryStore to use tmp_path for all orchestrator tests."""
+    """Patch MemoryStore to use tmp_path for all orchestrator tests.
+
+    Implementation note (A-11): This fixture patches the module-level ``_store``
+    variable in orchestrator.py. It works because memory_guard_node resolves
+    ``_store`` at call time (not at graph-compilation time). If ``memory_guard_node``
+    is ever refactored to capture ``_store`` in a closure or default argument,
+    this patch will silently stop working and tests will write to the real
+    persistent ChromaDB. If that happens, switch to:
+        monkeypatch.setattr("orchestrator.MemoryStore", lambda **kw: local_store)
+    """
     monkeypatch.setenv("ARES_ENV", "test")
     # Patch the module-level store in orchestrator
     import memory_store as ms_module
