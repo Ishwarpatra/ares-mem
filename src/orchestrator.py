@@ -67,6 +67,13 @@ class AgentState(TypedDict, total=False):
     # ── Memory Layer ───────────────────────────────────────────────────────
     memory_validation: Dict[str, Any]       # Validated trace from MemoryGuard
 
+    # ── Trace-layer validation (end-of-pipeline, separate from the input gate) ──
+    # These fields reflect MemoryGuard's assessment of the *execution trace*,
+    # NOT the incoming raw log. The security-critical flags are validation_flag
+    # and privilege_level set by memory_guard_validation_node (Layer 1).
+    trace_validation_flag: bool             # True if the stored trace was quarantined
+    trace_privilege_level: int              # Privilege assigned to the stored trace
+
     # ── Audit trail (append-only via operator.add) ─────────────────────────
     history: Annotated[List[str], operator.add]
 
@@ -249,8 +256,8 @@ def memory_guard_node(state: AgentState) -> Dict[str, Any]:
 
     return {
         "memory_validation": validated,
-        "validation_flag":   quarantine_flag,
-        "privilege_level":   priv_level,
+        "trace_validation_flag": quarantine_flag,
+        "trace_privilege_level": priv_level,
         "history": [
             f"[secure_memory] collection={collection}, "
             f"privilege={validated.get('privilege_label')}, "
@@ -284,6 +291,11 @@ def route_after_escalation(state: AgentState) -> str:
     Routes from 'human_escalation':
     - If approved is True and operator_decision is not in ("LOG_ONLY", "ESCALATE") → execute_response
     - Otherwise → secure_memory
+
+    NOTE (production behaviour): In production mode HumanEscalationAgent sets
+    approved=False, so this router always falls through to secure_memory.
+    This is intentionally conservative — no autonomous action is taken until
+    a human operator explicitly approves via out-of-band signal.
     """
     result = state.get("escalation_result", {})
     approved = result.get("approved", False)
