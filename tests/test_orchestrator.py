@@ -130,7 +130,8 @@ class TestHumanEscalation:
         A high-risk, low-confidence scenario should trigger escalation.
         The HumanEscalationAgent in 'test' env auto-approves.
         """
-        from orchestrator import decision_node, human_escalation_node
+        from typing import cast
+        from orchestrator import decision_node, human_escalation_node, AgentState
         # Construct a state with a high-risk, low-confidence analysis
         mock_analysis = {
             "risk_score": 65,
@@ -148,20 +149,21 @@ class TestHumanEscalation:
             "requires_escalation": True,
             "rationale": "Test escalation",
         }
-        state = {
+        state = cast(AgentState, {
             "raw_log": "test",
             "threat_analysis": mock_analysis,
             "decision": mock_decision,
             "history": [],
-        }
+        })
         result = human_escalation_node(state)
         assert "escalation_result" in result
         assert result["escalation_result"]["approved"] is True  # auto-approved in test mode
 
     def test_escalation_updates_decision(self):
         """After escalation, the decision field should be updated."""
-        from orchestrator import human_escalation_node
-        state = {
+        from typing import cast
+        from orchestrator import human_escalation_node, AgentState
+        state = cast(AgentState, {
             "raw_log": "test log",
             "threat_analysis": {
                 "risk_score": 65,
@@ -180,7 +182,7 @@ class TestHumanEscalation:
                 "rationale": "",
             },
             "history": [],
-        }
+        })
         result = human_escalation_node(state)
         # Operator decision should override original ESCALATE
         new_decision = result.get("decision", {})
