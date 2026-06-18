@@ -51,6 +51,12 @@ class BaseAgent(ABC):
 
         Returns:
             Dict with agent output plus `_meta` containing timing and agent name.
+
+        NOTE: This method is intended for standalone testing / debug use only.
+        The orchestrator nodes call the typed public methods directly
+        (e.g., `ingest_log`, `analyze`, `decide`, `execute`) and do NOT use
+        `run()`. Do not use `run()` inside pipeline nodes, as it injects
+        `_meta` into the result dict which is not part of any TypedDict schema.
         """
         start_ms = time.monotonic() * 1000
         try:
