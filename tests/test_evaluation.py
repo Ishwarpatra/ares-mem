@@ -25,7 +25,8 @@ from eval.metrics import compute_metrics, FamilyMetrics
 class TestCorpusGeneration:
 
     @pytest.fixture(scope="class")
-    def corpus_and_stats(self):
+    @classmethod
+    def corpus_and_stats(cls):
         corpus, stats = generate_corpus(seed=42)
         return corpus, stats
 
