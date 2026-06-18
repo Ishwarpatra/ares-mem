@@ -21,6 +21,9 @@ RUN python -m spacy download en_core_web_sm || \
 # Copy project source and tests
 COPY src/ ./src/
 COPY tests/ ./tests/
+COPY eval/ ./eval/
+COPY dataset/ ./dataset/
+COPY setup.py .
 
 ENV PYTHONPATH=/app/src
 
