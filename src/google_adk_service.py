@@ -3,14 +3,20 @@ from typing import Optional, List, Dict, Any
 
 # Try to import Google ADK components
 try:
-    import google_adk as adk
-    from google_adk.models import ModelConfig
-    from google_adk.agents import Agent
+    import google_adk as adk # type: ignore
+    from google_adk.models import ModelConfig # type: ignore
+    from google_adk.agents import Agent # type: ignore
+    _SDK_INSTALLED = True
 except ImportError:
     # Placeholder for environment where SDK is not yet installed
-    adk = None
-    ModelConfig = None
-    Agent = None
+    _SDK_INSTALLED = False
+    adk = None # type: ignore
+    class ModelConfig: # type: ignore
+        def __init__(self, *args, **kwargs):
+            pass
+    class Agent: # type: ignore
+        def __init__(self, *args, **kwargs):
+            pass
 
 class GoogleADKService:
     """
@@ -21,7 +27,7 @@ class GoogleADKService:
         self.model_name = model_name
         self.agent: Optional[Any] = None
         
-        if adk:
+        if _SDK_INSTALLED:
             self.model_config = ModelConfig(
                 model=self.model_name,
                 api_key=self.api_key
@@ -33,7 +39,7 @@ class GoogleADKService:
         """
         Creates a new Google ADK agent.
         """
-        if not adk:
+        if not _SDK_INSTALLED:
             raise RuntimeError("Google ADK SDK is not installed.")
         
         try:
