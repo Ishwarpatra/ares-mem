@@ -70,7 +70,10 @@ class TestLogIngestionAgent:
     def test_benign_low_severity(self, ingestor):
         log = "Jun 17 sshd: Accepted publickey for devops from 10.0.1.5 port 54321"
         result = ingestor.ingest_log(log)
-        assert result["severity"] in ("LOW", "MEDIUM", "INFO")
+        # LogIngestionAgent only emits LOW, MEDIUM, HIGH, or CRITICAL — not "INFO"
+        assert result["severity"] in ("LOW", "MEDIUM"), (
+            f"Unexpected severity for benign log: {result['severity']}"
+        )
 
     def test_summary_is_nonempty(self, ingestor):
         result = ingestor.ingest_log("Any log text here")
@@ -238,7 +241,8 @@ class TestDecisionAgent:
 
 class TestResponseAgent:
 
-    def _make_decision(self, decision_str, task_type="block_ip", priority="CRITICAL"):
+    def _make_decision(self, decision_str, task_type="block_ip", priority="CRITICAL",
+                       source_ip="192.168.1.100"):
         return {
             "decision": decision_str,
             "action": f"Test action for {decision_str}",
@@ -246,6 +250,7 @@ class TestResponseAgent:
             "priority": priority,
             "requires_escalation": False,
             "rationale": "Test rationale",
+            "source_ip": source_ip,
         }
 
     def test_returns_execution_result(self, muscle):
@@ -254,9 +259,13 @@ class TestResponseAgent:
         assert "action" in result
 
     def test_block_ip_success(self, muscle):
-        result = muscle.execute(self._make_decision("BLOCK_IP"))
+        result = muscle.execute(self._make_decision("BLOCK_IP", source_ip="192.168.1.100"))
         assert result["status"] == "SUCCESS"
         assert result["action"] == "BLOCK_IP"
+        # Verify the correct IP is used as the firewall target (A-18)
+        assert result["target"] == "192.168.1.100", (
+            f"Expected firewall target '192.168.1.100', got '{result['target']}'"
+        )
 
     def test_quarantine_success(self, muscle):
         result = muscle.execute(self._make_decision("QUARANTINE", "quarantine", "HIGH"))
