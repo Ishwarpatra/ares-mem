@@ -74,3 +74,6 @@ eval/results/
 
 # Reference PDF files (optional)
 *.pdf
+
+# Local Ollama model store
+.ollama/
