@@ -323,7 +323,9 @@ def generate_corpus(seed: int = 42, verbose: bool = False) -> Tuple[List[RawLogE
             n_benign += 1
         elif e.label == "ADVERSARIAL":
             n_adv += 1
-            family_counts[e.attack_family] = family_counts.get(e.attack_family, 0) + 1
+            fam = e.attack_family
+            if fam is not None:
+                family_counts[fam] = family_counts.get(fam, 0) + 1
         else:
             n_hn += 1
 
