@@ -74,6 +74,11 @@ class MemoryStore:
         Adds a validated trace to ChromaDB (legacy API — backwards compatible).
         Routes to the appropriate collection based on trust_tier string.
 
+        NOTE: This API stores metadata with a ``trust_tier`` string key.
+        Memories stored here are NOT retrievable via ``retrieve_by_privilege()``
+        (which filters on integer ``privilege_level``). Use ``add_memory_with_quarantine``
+        for all new code paths.
+
         Returns the generated document ID.
         """
         trust_tier = validated_trace.get("trust_tier", "untrusted_external")
@@ -264,17 +269,23 @@ class MemoryStore:
         privilege_level = int(provenance_tag.get("privilege_level", 1))
         quarantine_flag = bool(provenance_tag.get("quarantine", privilege_level < 3))
 
-        if quarantine_flag or privilege_level < 3:
-            self.quarantine.add(
+        target = self.quarantine if (quarantine_flag or privilege_level < 3) else self.collection
+        collection_name = "ares_quarantine" if target is self.quarantine else "ares_memory"
+
+        # ChromaDB raises an exception on duplicate IDs. The timestamp-modulo doc_id
+        # wraps every ~2.8 hours; the 4-byte random suffix makes true collision
+        # astronomically rare, but we retry once with a fresh random ID to be safe.
+        try:
+            target.add(
                 documents=[text],
                 metadatas=[provenance_tag],
                 ids=[doc_id],
             )
-            return "ares_quarantine"
-        else:
-            self.collection.add(
+        except Exception:
+            fallback_id = f"mem-{os.urandom(8).hex()}"
+            target.add(
                 documents=[text],
                 metadatas=[provenance_tag],
-                ids=[doc_id],
+                ids=[fallback_id],
             )
-            return "ares_memory"
+        return collection_name
