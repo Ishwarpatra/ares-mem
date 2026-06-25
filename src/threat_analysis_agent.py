@@ -21,7 +21,6 @@ _KNOWN_MALICIOUS_IP_PREFIXES = {
     "10.13.", "192.168.250.", "172.16.99.",  # Internal threat lab ranges
     "185.220.",  # Known Tor exit nodes
     "91.108.",   # Telegram spam source range
-    "0.0.0.",    # Unresolved / spoofed
 }
 
 

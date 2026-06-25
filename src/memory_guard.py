@@ -156,6 +156,8 @@ class MemoryGuard:
             Dict with privilege_level (int), privilege_label (str),
             quarantine (bool), features (dict), provenance_tag (dict).
         """
+        trace_text = trace_text.strip()
+
         features = {
             "entropy":            self.calculate_entropy(trace_text),
             "imperative_density": self.calculate_imperative_density(trace_text),
@@ -205,16 +207,16 @@ class MemoryGuard:
 
         High entropy with unusual characters → anomalous concentration of
         delimiters ([, <, |) commonly used in jailbreak payloads.
+        Uses the actual character set of the input (handles all Unicode).
         """
         if not text:
             return 0.0
         entropy = 0.0
         text_len = len(text)
-        for x in range(256):
-            count = text.count(chr(x))
-            if count > 0:
-                p_x = count / text_len
-                entropy -= p_x * math.log2(p_x)
+        freq = collections.Counter(text)
+        for count in freq.values():
+            p_x = count / text_len
+            entropy -= p_x * math.log2(p_x)
         return entropy
 
     def calculate_imperative_density(self, text: str) -> float:
