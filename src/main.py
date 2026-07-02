@@ -14,6 +14,15 @@ from typing import List, Dict, Any
 
 from dotenv import load_dotenv
 
+# Reconfigure stdout on Windows to prevent UnicodeEncodeError in legacy consoles
+if sys.platform.startswith("win"):
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except AttributeError:
+        pass
+
+load_dotenv()
+
 # Ensure src/ is on the path when run directly
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -26,10 +35,10 @@ load_dotenv()
 
 def print_banner():
     banner = """
-╔══════════════════════════════════════════════════════════════════╗
-║         PROJECT ARES-Mem — Autonomous Cybersecurity Defense      ║
-║         Multi-Agent Orchestration with Memory Sandboxing         ║
-╚══════════════════════════════════════════════════════════════════╝
+====================================================================
+          PROJECT ARES-Mem - Autonomous Cybersecurity Defense      
+          Multi-Agent Orchestration with Memory Sandboxing          
+====================================================================
 """
     print(banner)
 
@@ -38,7 +47,7 @@ def run_pipeline(logs: List[str]) -> List[Dict[str, Any]]:
     """Runs the ARES-Mem pipeline on a list of raw logs."""
     results = []
     for i, log in enumerate(logs, 1):
-        print(f"\n{'─'*60}")
+        print(f"\n{'-'*60}")
         print(f"[Log {i}/{len(logs)}] Processing...")
         print(f"  Input: {log[:100]}...")
 
@@ -50,35 +59,35 @@ def run_pipeline(logs: List[str]) -> List[Dict[str, Any]]:
         result["_log_index"] = i
         results.append(result)
 
-        print(f"  ✔ Complete | Latency: {elapsed_ms:.1f}ms | "
+        print(f"  [OK] Complete | Latency: {elapsed_ms:.1f}ms | "
               f"Decision: {result.get('decision', {}).get('decision', 'N/A')} | "
               f"Risk: {result.get('threat_score', 0)} | "
-              f"Input quarantined: {result.get('validation_flag', False)} | "
-              f"Trace quarantined: {result.get('trace_validation_flag', False)}")
+              f"Status: {result.get('security_status', 'valid').upper()}")
 
     return results
 
 
 def print_summary_report(results: List[Dict[str, Any]]):
     """Prints the final execution report."""
-    print(f"\n{'═'*60}")
+    print(f"\n{'='*80}")
     print("FINAL EXECUTION REPORT")
-    print(f"{'═'*60}")
-    print(f"{'#':<4} {'Event Type':<20} {'Risk':>6} {'Decision':<15} {'Priv':<6} {'Latency':>10}")
-    print(f"{'─'*60}")
+    print(f"{'='*80}")
+    print(f"{'#':<4} {'Event Type':<16} {'Risk':>6} {'Decision':<12} {'Priv':<6} {'Status':<12} {'Latency':>12}")
+    print(f"{'-'*80}")
 
     total_latency = 0
     for r in results:
         idx = r.get("_log_index", "?")
-        threat = r.get("threat_analysis", {}).get("threat_type", "UNKNOWN")[:18]
+        threat = r.get("threat_analysis", {}).get("threat_type", "UNKNOWN")[:15]
         score = r.get("threat_score", 0)
-        decision = r.get("decision", {}).get("decision", "N/A")[:13]
+        decision = r.get("decision", {}).get("decision", "N/A")[:11]
         priv = r.get("privilege_level", "?")
+        status = r.get("security_status", "valid")[:11]
         lat = r.get("_pipeline_latency_ms", 0)
         total_latency += lat
-        print(f"{idx:<4} {threat:<20} {score:>6} {decision:<15} {priv:<6} {lat:>8.1f}ms")
+        print(f"{idx:<4} {threat:<16} {score:>6} {decision:<12} {priv:<6} {status:<12} {lat:>10.1f}ms")
 
-    print(f"{'─'*60}")
+    print(f"{'-'*80}")
     avg_lat = total_latency / len(results) if results else 0
     print(f"{'Total logs:':<30} {len(results)}")
     print(f"{'Total latency:':<30} {total_latency:.1f}ms")
@@ -88,9 +97,9 @@ def print_summary_report(results: List[Dict[str, Any]]):
     try:
         store = MemoryStore()
         stats = store.stats()
-        print(f"\n{'─'*60}")
+        print(f"\n{'-'*60}")
         print("MEMORY STORE STATISTICS")
-        print(f"{'─'*60}")
+        print(f"{'-'*60}")
         print(f"  ares_memory (verified):   {stats['memory_count']} entries")
         print(f"  ares_quarantine (flagged): {stats['quarantine_count']} entries")
 
@@ -98,13 +107,13 @@ def print_summary_report(results: List[Dict[str, Any]]):
         if quarantine_info.get("count", 0) > 0:
             print(f"\n  Quarantine samples:")
             for sample in quarantine_info.get("samples", []):
-                print(f"    • [{sample['privilege_label'].upper()}] {sample['text_preview']}")
+                print(f"    * [{sample['privilege_label'].upper()}] {sample['text_preview']}")
     except Exception as e:
         print(f"  [Warning] Could not fetch memory stats: {e}")
 
-    print(f"\n{'═'*60}")
+    print(f"\n{'='*60}")
     print("ARES-Mem pipeline complete.")
-    print(f"{'═'*60}\n")
+    print(f"{'='*60}\n")
 
 
 def main():

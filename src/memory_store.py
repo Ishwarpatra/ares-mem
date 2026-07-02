@@ -128,6 +128,10 @@ class MemoryStore:
             if isinstance(v, (str, int, float, bool))
         }
 
+        # Save security classification and string privilege level to metadata
+        safe_tag["security_classification"] = validated_result.get("security_classification", "valid")
+        safe_tag["privilege_level_str"] = validated_result.get("privilege_label", "untrusted")
+
         doc_id = f"mem-{int(time.time() * 1000) % 10_000_000:07d}-{os.urandom(4).hex()}"
         collection_name = self._route_to_collection(text, safe_tag, doc_id)
         return doc_id, collection_name
@@ -208,7 +212,12 @@ class MemoryStore:
         for doc, meta in zip(docs, metas):
             if doc is None or meta is None:
                 continue
-            mem_priv = int(cast(Any, meta.get("privilege_level", 1)))
+            mem_priv_val = meta.get("privilege_level", 1)
+            if isinstance(mem_priv_val, str):
+                mem_priv = PRIVILEGE_LEVELS.get(mem_priv_val.lower(), 1)
+            else:
+                mem_priv = int(cast(Any, mem_priv_val))
+                
             if mem_priv >= min_privilege:
                 allowed.append(doc)
             else:

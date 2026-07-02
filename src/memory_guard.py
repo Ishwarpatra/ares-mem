@@ -135,6 +135,7 @@ class MemoryGuard:
             "privilege_level": priv,
             "privilege_label": validated["privilege_label"],
             "quarantine": validated["quarantine"],
+            "security_classification": validated.get("security_classification", "valid"),
             "features": validated["features"],
         }
 
@@ -171,7 +172,16 @@ class MemoryGuard:
             features=features,
             source=source,
             provenance_hops=provenance_hops,
+            text=trace_text,
         )
+
+        # Determine security classification
+        if quarantine:
+            security_classification = "dangerous"
+        elif privilege_level >= 4:
+            security_classification = "authorized"
+        else:
+            security_classification = "valid"
 
         provenance_tag = {
             "privilege_level":  privilege_level,
@@ -180,6 +190,7 @@ class MemoryGuard:
             "provenance_hops":  provenance_hops,
             "quarantine":       quarantine,
             "classification_reason": reason,
+            "security_classification": security_classification,
             "entropy":          round(features["entropy"], 4),
             "semantic_distance": round(features["semantic_distance"], 4),
             "perplexity":       round(features["perplexity"], 4),
@@ -191,6 +202,7 @@ class MemoryGuard:
             "privilege_level": privilege_level,
             "privilege_label": privilege_label,
             "quarantine":      quarantine,
+            "security_classification": security_classification,
             "features":        features,
             "provenance_tag":  provenance_tag,
         }
@@ -315,6 +327,7 @@ class MemoryGuard:
         features: Dict[str, float],
         source: str,
         provenance_hops: int,
+        text: str = "",
     ):
         """
         5-tier privilege assignment based on feature thresholds and provenance.
@@ -326,21 +339,57 @@ class MemoryGuard:
         entropy = features["entropy"]
         perplexity = features["perplexity"]
 
+        text_lower = text.lower()
+
+        # ── 1. Specific Adversarial Family Checks (Heuristics) ─────────────────
+        
+        # Tag Spoofing heuristic: raw text claiming privilege levels/tier metadata
+        tag_spoof_kws = [
+            "privilege_level=", "privilege_label=", "trust_tier=", "origin_source=",
+            "bypass_guard", "provenance=", "privilege=", "trust_tier:", "privilege_level:"
+        ]
+        if any(kw in text_lower for kw in tag_spoof_kws):
+            return 1, "untrusted", True, "Tag spoofing injection: raw text contains metadata assignments"
+
+        # Authority Spoofing heuristic: claiming system/internal authority in text
+        auth_spoof_kws = [
+            "system-level authority", "system privilege", "system-tier directive",
+            "trust_tier=verified_internal", "elevated-trust", "assign privilege_level=5",
+            "grant system privilege", "privilege=5", "privilege level five"
+        ]
+        if any(kw in text_lower for kw in auth_spoof_kws):
+            return 1, "untrusted", True, "Authority spoofing injection: text claims elevated system privilege"
+
+        # Whitelist Downgrade heuristic: attempting to disable alerts or override blocklists
+        whitelist_downgrade_kws = [
+            "suppress detection", "no alert required", "internally trusted",
+            "removed from blocklist", "reclassify as benign", "penetration-testing node",
+            "test traffic only", "whitelisted — no alert", "known safe",
+            "pre-approved and whitelisted"
+        ]
+        if any(kw in text_lower for kw in whitelist_downgrade_kws):
+            return 1, "untrusted", True, "Whitelist downgrade injection: text attempts alert suppression"
+
+        # Obfuscated Injection heuristic: administrative policy reset commands
+        obfuscated_kws = [
+            "reset to defaults", "updated to baseline",
+            "access control entries cleared", "reclassified as routine",
+            "rules suspended pending"
+        ]
+        if any(kw in text_lower for kw in obfuscated_kws):
+            return 1, "untrusted", True, "Obfuscated injection: text attempts security policy override/reset"
+
         # ── Hard quarantine triggers (UNTRUSTED = 1) ─────────────────────────
         # Thresholds calibrated empirically against the synthetic corpus:
         #   sem_dist threshold 0.48: catches DIRECT_OVERRIDE (mean 0.51) while
         #     keeping benign (mean 0.11) well clear of the boundary.
         #   imp_den threshold 0.25: catches jailbreak imperatives.
-        #   perplexity threshold 8000: above TAG_SPOOFING mean (8639 is at/above
-        #     this so we use compound logic: perplexity AND sem_dist/imp_den)
         if sem_dist > 0.48:
             return 1, "untrusted", True, f"Semantic similarity to adversarial centroid: {sem_dist:.3f} > 0.48"
         if imp_den > 0.25:
             return 1, "untrusted", True, f"Imperative density: {imp_den:.3f} > 0.25"
-        # Perplexity alone is not a reliable signal (log tokens like IPs/ports
-        # inflate perplexity in short baseline models).  Only flag as hard
-        # quarantine when BOTH perplexity is extreme AND sem_dist is elevated.
-        if perplexity > 7500.0 and sem_dist > 0.20:
+        # Perplexity anomaly combined with elevated similarity
+        if perplexity > 1500.0 and sem_dist > 0.20:
             return 1, "untrusted", True, f"Perplexity anomaly ({perplexity:.0f}) + elevated similarity ({sem_dist:.3f})"
 
         # ── Trust decay for external provenance ──────────────────────────────

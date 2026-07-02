@@ -74,6 +74,9 @@ class AgentState(TypedDict, total=False):
     trace_validation_flag: bool             # True if the stored trace was quarantined
     trace_privilege_level: int              # Privilege assigned to the stored trace
 
+    # ── Security classification taxonomy status ────────────────────────────
+    security_status: str                    # valid | authorized | referred | dangerous
+
     # ── Audit trail (append-only via operator.add) ─────────────────────────
     history: Annotated[List[str], operator.add]
 
@@ -383,7 +386,20 @@ def run_ares(log_text: str) -> Dict[str, Any]:
         "raw_log": log_text,
         "history": [],
     }
-    return ares_app.invoke(initial_state)
+    res = ares_app.invoke(initial_state)
+    
+    # Derive final security status taxonomy classification
+    if res.get("validation_flag") is True or res.get("trace_validation_flag") is True:
+        status = "dangerous"
+    elif res.get("decision", {}).get("decision") == "ESCALATE" or "escalation_result" in res:
+        status = "referred"
+    elif res.get("privilege_level", 0) >= 4:
+        status = "authorized"
+    else:
+        status = "valid"
+        
+    res["security_status"] = status
+    return res
 
 
 def main():
