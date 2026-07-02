@@ -102,7 +102,8 @@ class DecisionAgent(BaseAgent):
             "priority": priority,
             "requires_escalation": requires_escalation,
             "rationale": rationale,
-            "source_ip": analysis.get("structured_log", {}).get("source_ip", "0.0.0.0"),
+            # Null-safe: structured_log may be None if validation short-circuited
+            "source_ip": (analysis.get("structured_log") or {}).get("source_ip", "0.0.0.0"),
         }
         return result  # type: ignore[return-value]
 
