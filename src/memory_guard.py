@@ -16,7 +16,8 @@ Privilege Assignment (5-tier):
 Decision Logic:
   - semantic_distance > 0.48 → UNTRUSTED
   - imperative_density > 0.25 → UNTRUSTED
-  - entropy > 5.0 (very high special char density) → quarantine flag
+  - entropy > 5.2 → soft privilege downgrade (not hard quarantine;
+      benign mean ≈ 4.6 ± 0.16, threshold ≈ 4σ above mean)
   - source == 'external' → capped at LOW unless explicitly elevated
   - all clear, internal → MEDIUM or higher
 
@@ -197,14 +198,24 @@ class MemoryGuard:
             "imperative_density": round(features["imperative_density"], 4),
         }
 
+        # Check signature layer separately so callers can distinguish
+        # which detection tier fired (signature vs ETVL semantic)
+        sig_match, sig_family, sig_phrase = self._check_signature_layer(trace_text)
+
         return {
-            "text":            trace_text,
-            "privilege_level": privilege_level,
-            "privilege_label": privilege_label,
-            "quarantine":      quarantine,
+            "text":              trace_text,
+            "privilege_level":  privilege_level,
+            "privilege_label":  privilege_label,
+            "quarantine":       quarantine,
             "security_classification": security_classification,
-            "features":        features,
-            "provenance_tag":  provenance_tag,
+            "features":         features,
+            "provenance_tag":   provenance_tag,
+            # Detection tier provenance — which layer triggered quarantine?
+            # signature_match=True  → corpus-derived blocklist fired (not ETVL)
+            # signature_match=False → ETVL semantic/statistical features fired (or clean)
+            "signature_match":  sig_match,
+            "signature_family": sig_family,   # e.g. "TAG_SPOOFING" or None
+            "signature_phrase": sig_phrase,   # matched phrase or None
         }
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -322,6 +333,79 @@ class MemoryGuard:
     # Privilege Assignment Logic
     # ══════════════════════════════════════════════════════════════════════════
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # KNOWN SIGNATURE BLOCKLIST — Tier 1 Detection
+    # ══════════════════════════════════════════════════════════════════════════
+    #
+    # IMPORTANT RESEARCH DISCLOSURE:
+    # These phrase lists are a corpus-derived BLOCKLIST — they match known
+    # exact phrases from the training corpus templates (dataset/synthetic_corpus.py).
+    # They are NOT part of the ETVL semantic detection pipeline.
+    # Detection rate on the training corpus is NOT an independent measure of
+    # generalization — an attacker who rephrases any payload bypasses this layer.
+    #
+    # To measure actual generalization, see eval/run_evaluation.py --holdout,
+    # which runs against dataset/holdout_corpus.py (reworded payloads with zero
+    # phrase overlap with training templates, enforced by tests/test_no_corpus_leakage.py).
+    #
+    # This layer is run FIRST because it is O(k) cheap and catches exact-match
+    # replays immediately, before the more expensive ETVL pipeline runs.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # TAG_SPOOFING: text embedding raw metadata field assignments
+    _SIG_TAG_SPOOFING = [
+        "privilege_level=", "privilege_label=", "trust_tier=", "origin_source=",
+        "bypass_guard", "provenance=", "privilege=", "trust_tier:", "privilege_level:",
+    ]
+
+    # AUTHORITY_SPOOFING: text claiming system-level authority
+    _SIG_AUTHORITY_SPOOFING = [
+        "system-level authority", "system privilege", "system-tier directive",
+        "trust_tier=verified_internal", "elevated-trust", "assign privilege_level=5",
+        "grant system privilege", "privilege=5", "privilege level five",
+    ]
+
+    # WHITELIST_DOWNGRADE: text attempting to suppress alerts or downgrade blocklists
+    _SIG_WHITELIST_DOWNGRADE = [
+        "suppress detection", "no alert required", "internally trusted",
+        "removed from blocklist", "reclassify as benign", "penetration-testing node",
+        "test traffic only", "whitelisted — no alert", "known safe",
+        "pre-approved and whitelisted",
+    ]
+
+    # OBFUSCATED_INJECTION: policy-reset phrasing disguised as operational text
+    _SIG_OBFUSCATED_INJECTION = [
+        "reset to defaults", "updated to baseline",
+        "access control entries cleared", "reclassified as routine",
+        "rules suspended pending",
+    ]
+
+    _SIGNATURE_FAMILIES = [
+        ("TAG_SPOOFING",         _SIG_TAG_SPOOFING),
+        ("AUTHORITY_SPOOFING",   _SIG_AUTHORITY_SPOOFING),
+        ("WHITELIST_DOWNGRADE",  _SIG_WHITELIST_DOWNGRADE),
+        ("OBFUSCATED_INJECTION", _SIG_OBFUSCATED_INJECTION),
+    ]
+
+    def _check_signature_layer(
+        self, text: str
+    ):
+        """
+        Tier 1: Corpus-derived exact-phrase blocklist check.
+
+        Returns: (matched: bool, family: str | None, phrase: str | None)
+
+        NOTE: This is a BLOCKLIST, not a generalized detector.
+        Phrases are derived from the training corpus templates.
+        Generalization is measured separately via --holdout evaluation.
+        """
+        text_lower = text.lower()
+        for family_name, kw_list in self._SIGNATURE_FAMILIES:
+            for kw in kw_list:
+                if kw in text_lower:
+                    return True, family_name, kw
+        return False, None, None
+
     def _assign_privilege(
         self,
         features: Dict[str, float],
@@ -332,6 +416,13 @@ class MemoryGuard:
         """
         5-tier privilege assignment based on feature thresholds and provenance.
 
+        Detection is two-tiered:
+          Tier 1 — Signature blocklist (_check_signature_layer): exact-phrase
+            matching against known training-corpus patterns. Fast, O(k), but
+            zero generalization beyond those exact phrases.
+          Tier 2 — ETVL semantic/statistical features: sem_dist, imp_den,
+            perplexity compound gate. Generalizes to unseen phrasing.
+
         Returns: (privilege_level: int, label: str, quarantine: bool, reason: str)
         """
         sem_dist = features["semantic_distance"]
@@ -339,81 +430,56 @@ class MemoryGuard:
         entropy = features["entropy"]
         perplexity = features["perplexity"]
 
-        text_lower = text.lower()
+        # ── Tier 1: Signature blocklist ───────────────────────────────────────
+        sig_matched, sig_family, sig_phrase = self._check_signature_layer(text)
+        if sig_matched:
+            return 1, "untrusted", True, (
+                f"[SIGNATURE:{sig_family}] Matched known corpus phrase: '{sig_phrase}'"
+            )
 
-        # ── 1. Specific Adversarial Family Checks (Heuristics) ─────────────────
-        
-        # Tag Spoofing heuristic: raw text claiming privilege levels/tier metadata
-        tag_spoof_kws = [
-            "privilege_level=", "privilege_label=", "trust_tier=", "origin_source=",
-            "bypass_guard", "provenance=", "privilege=", "trust_tier:", "privilege_level:"
-        ]
-        if any(kw in text_lower for kw in tag_spoof_kws):
-            return 1, "untrusted", True, "Tag spoofing injection: raw text contains metadata assignments"
-
-        # Authority Spoofing heuristic: claiming system/internal authority in text
-        auth_spoof_kws = [
-            "system-level authority", "system privilege", "system-tier directive",
-            "trust_tier=verified_internal", "elevated-trust", "assign privilege_level=5",
-            "grant system privilege", "privilege=5", "privilege level five"
-        ]
-        if any(kw in text_lower for kw in auth_spoof_kws):
-            return 1, "untrusted", True, "Authority spoofing injection: text claims elevated system privilege"
-
-        # Whitelist Downgrade heuristic: attempting to disable alerts or override blocklists
-        whitelist_downgrade_kws = [
-            "suppress detection", "no alert required", "internally trusted",
-            "removed from blocklist", "reclassify as benign", "penetration-testing node",
-            "test traffic only", "whitelisted — no alert", "known safe",
-            "pre-approved and whitelisted"
-        ]
-        if any(kw in text_lower for kw in whitelist_downgrade_kws):
-            return 1, "untrusted", True, "Whitelist downgrade injection: text attempts alert suppression"
-
-        # Obfuscated Injection heuristic: administrative policy reset commands
-        obfuscated_kws = [
-            "reset to defaults", "updated to baseline",
-            "access control entries cleared", "reclassified as routine",
-            "rules suspended pending"
-        ]
-        if any(kw in text_lower for kw in obfuscated_kws):
-            return 1, "untrusted", True, "Obfuscated injection: text attempts security policy override/reset"
-
-        # ── Hard quarantine triggers (UNTRUSTED = 1) ─────────────────────────
-        # Thresholds calibrated empirically against the synthetic corpus:
-        #   sem_dist threshold 0.48: catches DIRECT_OVERRIDE (mean 0.51) while
-        #     keeping benign (mean 0.11) well clear of the boundary.
-        #   imp_den threshold 0.25: catches jailbreak imperatives.
+        # ── Tier 2: ETVL semantic/statistical detection ───────────────────────
+        # sem_dist threshold 0.48: catches DIRECT_OVERRIDE (mean 0.51) while
+        #   keeping benign (mean 0.11) well clear of the decision boundary.
+        # imp_den threshold 0.25: catches jailbreak imperative verb density.
         if sem_dist > 0.48:
-            return 1, "untrusted", True, f"Semantic similarity to adversarial centroid: {sem_dist:.3f} > 0.48"
+            return 1, "untrusted", True, (
+                f"[ETVL:SEM_DIST] Adversarial centroid similarity: {sem_dist:.3f} > 0.48"
+            )
         if imp_den > 0.25:
-            return 1, "untrusted", True, f"Imperative density: {imp_den:.3f} > 0.25"
-        # Perplexity anomaly combined with elevated similarity
-        if perplexity > 1500.0 and sem_dist > 0.20:
-            return 1, "untrusted", True, f"Perplexity anomaly ({perplexity:.0f}) + elevated similarity ({sem_dist:.3f})"
+            return 1, "untrusted", True, (
+                f"[ETVL:IMP_DEN] Imperative density: {imp_den:.3f} > 0.25"
+            )
+        # Compound perplexity gate — calibrated 2026-07 against 8 benign
+        # edge-case log types (session tokens, JWTs, IPs, health checks, etc.).
+        # sem_dist companion raised from 0.20 to 0.26 after session_token_hex
+        # (PP=2787, sem_dist=0.234) triggered a false positive at 0.20.
+        # All 8 benign edge cases pass at perplexity > 1500 AND sem_dist > 0.26.
+        # (See tests/test_memory_guard.py::TestPerplexityThreshold)
+        if perplexity > 1500.0 and sem_dist > 0.26:
+            return 1, "untrusted", True, (
+                f"[ETVL:PERPLEXITY] Anomaly ({perplexity:.0f}) + elevated sim ({sem_dist:.3f})"
+            )
 
         # ── Trust decay for external provenance ──────────────────────────────
-        # Each external hop reduces trust by one tier (floor at LOW=2)
         if source == "system":
             base_level = 5  # SYSTEM
         elif source == "internal":
             base_level = 4 if provenance_hops <= 1 else 3  # HIGH or MEDIUM
         else:
-            # External: start at LOW, decay with hops
+            # External: start at LOW, decay with hops (floor at 1)
             base_level = max(2, 2 - (provenance_hops - 1))
 
-        # ── Secondary risk factors (soft downgrade) ───────────────────────────
-        # entropy > 5.2: genuine anomaly (benign mean 4.6, std 0.16 → 5.2 = ~4σ)
-        reason = f"Source={source}, hops={provenance_hops}, all features within bounds"  # default
+        # ── Secondary risk factors (soft downgrade, not hard quarantine) ──────
+        # entropy > 5.2: benign mean 4.6, std 0.16 → ~4σ above benign mean
+        reason = f"[CLEAN] Source={source}, hops={provenance_hops}, all features within bounds"
         if entropy > 5.2:
             base_level = max(1, base_level - 1)
-            reason = f"High entropy {entropy:.2f} + source={source}"
+            reason = f"[SOFT:ENTROPY] High entropy {entropy:.2f} + source={source}"
         elif sem_dist > 0.35:
-            # Moderate similarity: soft downgrade (still passes, but lower trust)
+            # Moderate similarity: soft downgrade (passes, but lower trust)
             base_level = max(2, base_level - 1)
-            reason = f"Moderate semantic similarity {sem_dist:.3f} + source={source}"
+            reason = f"[SOFT:SEM_DIST] Moderate similarity {sem_dist:.3f} + source={source}"
 
-        # Clamp to valid range
         level = max(1, min(5, base_level))
         label_map = {5: "system", 4: "high", 3: "medium", 2: "low", 1: "untrusted"}
         label = label_map[level]

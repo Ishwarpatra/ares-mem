@@ -129,7 +129,7 @@ tests/test_evaluation.py        ✓ 29 tests — Evaluation metrics verified
 |---|---|---|---|
 | Semantic Distance | Cosine similarity to 15-seed adversarial centroid | > 0.48 | QUARANTINE |
 | Imperative Density | POS-tagging / keyword heuristic | > 0.25 | QUARANTINE |
-| Perplexity | Character-level bigram model | > 1500 AND sem_dist > 0.20 (compound) | QUARANTINE |
+| Perplexity | Character-level bigram model | > 1500 AND sem_dist > 0.26 (compound) | QUARANTINE |
 | Shannon Entropy | Byte-level entropy | > 5.2 | Soft privilege downgrade (not hard quarantine) |
 | Provenance Hops | Chain-of-custody depth | External + hops | Trust decay |
 
