@@ -24,7 +24,7 @@ memory_guard:
   # sem_dist companion raised from 0.20 -> 0.26 after session_token_hex FP
   # (PP=2787, sem_dist=0.234) triggered a false positive at the 0.20 setting.
   perplexity_threshold: 1500.0
-  perplexity_sem_companion: 0.26
+  perplexity_sem_companion: 0.40
 
   # Soft downgrade (not quarantine) — benign mean 4.6 +/- 0.16, threshold ~4 sigma
   entropy_soft_threshold: 5.2
@@ -46,3 +46,9 @@ threat_analysis:
   privileged_port_score: 15  # Port < 1024 targeted
   critical_severity_score: 10  # Severity == CRITICAL
   multi_sig_bonus_per: 5     # Per additional signature matched beyond first
+
+policy_rules:
+  # Action to take when Memory Guard quarantines a log
+  # Options: LOG_ONLY (safe default) | QUARANTINE_HOST (active isolation response)
+  quarantine_action: "LOG_ONLY"
+  webhook_url: "http://localhost:8080/api/webhook/simulate"
