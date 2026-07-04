@@ -35,3 +35,8 @@ black>=24.2.0
 # Optional SDK integrations (graceful fallback if not installed)
 # google-adk
 # opensandbox
+
+# API Service & Web Dashboard
+fastapi>=0.100.0
+uvicorn>=0.20.0
+requests>=2.31.0
