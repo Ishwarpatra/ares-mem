@@ -42,6 +42,10 @@ _DEFAULTS: Dict[str, Any] = {
         "critical_severity_score":  10,
         "multi_sig_bonus_per":      5,
     },
+    "policy_rules": {
+        "quarantine_action":        "LOG_ONLY",
+        "webhook_url":              "http://localhost:8080/api/webhook/simulate",
+    },
 }
 
 # ── Locate config file ────────────────────────────────────────────────────────
