@@ -1,6 +1,9 @@
 # Project ARES-Mem
 
-**Autonomous Resilient Episodic Security Memory — Production-Grade Multi-Agent Cybersecurity Defense System**
+**Autonomous Resilient Episodic Security Memory — Research Prototype for Adversarial Memory Filtration & Multi-Agent Cybersecurity Defense**
+
+> [!IMPORTANT]
+> **Research Integrity Notice**: While ARES-Mem achieves a 96.0% detection rate on its training corpus baseline, first-party testing against a held-out adversarial corpus with zero phrase overlap reveals a **11.1% Memory Guard generalization rate** (88.9% Attack Success Rate) due to training-set leakage in keyword heuristics. See the [holdout summary file](eval/results/holdout_evaluation_summary.txt) and Part V of the [comparative report](ARES_Mem_LLM_SLM_Model_Comparison_Report.docx) for detailed disclosures on the generalization gap.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-green.svg)](https://github.com/langchain-ai/langgraph)

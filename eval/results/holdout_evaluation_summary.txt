@@ -23,14 +23,14 @@ Holdout corpus size: 45 adversarial entries
 
 Per-family Memory Guard holdout detection rate:
   AUTHORITY_SPOOFING           0/10 (0%)
-  DIRECT_OVERRIDE              1/5 (20%)
+  DIRECT_OVERRIDE*             1/5 (20%) — *Note: small sample size (n=5)
   OBFUSCATED_INJECTION         0/10 (0%)
   TAG_SPOOFING                 4/10 (40%)
   WHITELIST_DOWNGRADE          0/10 (0%)
 
 Per-family Pipeline holdout detection rate:
   AUTHORITY_SPOOFING           0/10 (0%)
-  DIRECT_OVERRIDE              2/5 (40%)
+  DIRECT_OVERRIDE*             2/5 (40%) — *Note: small sample size (n=5)
   OBFUSCATED_INJECTION         0/10 (0%)
   TAG_SPOOFING                 4/10 (40%)
   WHITELIST_DOWNGRADE          0/10 (0%)

@@ -258,7 +258,7 @@ function auditValidationSection() {
           ["Guard Detection Rate (Recall)", "96.0%",   "≥ 90% (CI exit-code gate in run_evaluation.py)"],
           ["False Positive Rate — Benign",  "0.5%",    "< 10% (target per README)"],
           ["False Positive Rate — Hard-Negative", "~5%", "Acceptable; hard-neg contains imperative verbs by design"],
-          ["End-to-End ASR (attack success)", "0.0%",  "= 0% on evaluated corpus (no FN events caused pipeline failure)"],
+          ["End-to-End ASR (attack success)", "0.0%*",  "Baseline on training corpus (no FN events). *NOTE: See Part V for holdout generalization results, which differ substantially (ASR: 86.7%) due to test-set leakage."],
           ["Adversarial families at 100% DR", "DIRECT_OVERRIDE, AUTHORITY_SPOOFING, WHITELIST_DOWNGRADE, TAG_SPOOFING", "Heuristic detectors cover these families exactly"],
           ["Corpus reproducibility", "Deterministic (seed=42)", "random.Random(seed) — no global RNG pollution"],
         ].map(([m, r, t], i) =>
@@ -698,7 +698,7 @@ function integrityLimitationsSection() {
         ]),
         ...[
           ["AUTHORITY_SPOOFING",   "0/10 (0%)",  "0/10 (0%)"],
-          ["DIRECT_OVERRIDE",       "1/5 (20%)",  "2/5 (40%)"],
+          ["DIRECT_OVERRIDE*",      "1/5 (20%)",  "2/5 (40%)"],
           ["OBFUSCATED_INJECTION",  "0/10 (0%)",  "0/10 (0%)"],
           ["TAG_SPOOFING",          "4/10 (40%)", "4/10 (40%)"],
           ["WHITELIST_DOWNGRADE",   "0/10 (0%)",  "0/10 (0%)"],
@@ -712,7 +712,7 @@ function integrityLimitationsSection() {
       ],
       [2940, 2940, 2960]
     ),
-    caption("Table 5.2 — Generalization rate (Recall) by attack family against held-out reworded payloads."),
+    caption("Table 5.2 — Generalization rate (Recall) by attack family against held-out reworded payloads. * = Insufficient sample size (n=5) for a statistically reliable rate."),
 
     h2("5.4 Analysis of Generalization Gap and Mitigation Plan"),
     bodyPara(
