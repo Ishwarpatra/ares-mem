@@ -13,9 +13,21 @@ import time
 import sys
 import os
 from typing import Any, Dict, cast
+import requests
+import concurrent.futures
 
 from base import BaseAgent
 from models import ThreatAnalysis, Decision, ExecutionResult
+
+_WEBHOOK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+
+def _send_webhook_async(url: str, payload: dict, logger):
+    try:
+        # Enforce strict 2-second HTTP connection/response timeout
+        res = requests.post(url, json=payload, timeout=2.0)
+        logger.info("Webhook alert dispatched successfully to %s. Status code: %d", url, res.status_code)
+    except Exception as err:
+        logger.error("Failed to dispatch webhook alert to %s: %s", url, err)
 
 # Load decision thresholds from config package
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -191,9 +203,22 @@ class ResponseAgent(BaseAgent):
         return "SUCCESS", f"Host isolated to quarantine VLAN. Action: {decision.get('action')}", target
 
     def _send_alert(self, decision: Decision):
-        """Simulate SIEM / PagerDuty / Slack alert notification."""
+        """Simulate SIEM / PagerDuty / Slack alert notification and send async webhook."""
         target = "soc_alert_queue"
         self.logger.info("SIMULATED: Sending SOC alert via SIEM webhook")
+        
+        # Look up webhook_url from environment or SETTINGS config
+        url = os.getenv("ARES_WEBHOOK_URL")
+        if not url:
+            try:
+                url = SETTINGS.policy_rules.webhook_url
+            except AttributeError:
+                url = "http://localhost:8080/api/webhook/simulate"
+                
+        if url:
+            self.logger.info("Dispatching fire-and-forget webhook alert to %s", url)
+            _WEBHOOK_EXECUTOR.submit(_send_webhook_async, url, decision, self.logger)
+            
         return "SUCCESS", f"SOC alert dispatched. Priority: {decision.get('priority')}. {decision.get('action')}", target
 
     def _log_event(self, decision: Decision):
