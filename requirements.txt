@@ -25,6 +25,7 @@ spacy>=3.7.4
 
 # Configuration & Environment
 python-dotenv>=1.0.1
+pyyaml>=6.0.1      # config/settings.yaml loader
 
 # Testing & Engineering Standards
 pytest>=8.0.2

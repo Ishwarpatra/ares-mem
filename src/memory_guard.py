@@ -28,11 +28,31 @@ References:
 import math
 import warnings
 import collections
+import sys
+import os
 from typing import Dict, Any, Optional, cast
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
+
+# Config loader — load thresholds from config/settings.yaml
+_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
+if _CONFIG_DIR not in sys.path:
+    sys.path.insert(0, _CONFIG_DIR)
+try:
+    from settings import SETTINGS as _SETTINGS
+    _MG_CFG = _SETTINGS.memory_guard
+except Exception:  # pragma: no cover — fallback keeps tests isolated
+    import types
+    _MG_CFG = types.SimpleNamespace(
+        sem_dist_threshold=0.48,
+        imp_den_threshold=0.25,
+        perplexity_threshold=1500.0,
+        perplexity_sem_companion=0.26,
+        entropy_soft_threshold=5.2,
+        entropy_soft_sem_companion=0.35,
+    )
 
 # spaCy with graceful fallback
 try:
@@ -437,25 +457,26 @@ class MemoryGuard:
                 f"[SIGNATURE:{sig_family}] Matched known corpus phrase: '{sig_phrase}'"
             )
 
-        # ── Tier 2: ETVL semantic/statistical detection ───────────────────────
-        # sem_dist threshold 0.48: catches DIRECT_OVERRIDE (mean 0.51) while
-        #   keeping benign (mean 0.11) well clear of the decision boundary.
-        # imp_den threshold 0.25: catches jailbreak imperative verb density.
-        if sem_dist > 0.48:
+        # -- Tier 2: ETVL semantic/statistical detection --
+        # Thresholds from config/settings.yaml (memory_guard section).
+        # Edit that file to tune without touching source code.
+        _sd_thr = _MG_CFG.sem_dist_threshold        # default 0.48
+        _id_thr = _MG_CFG.imp_den_threshold          # default 0.25
+        _pp_thr = _MG_CFG.perplexity_threshold       # default 1500.0
+        _pp_sd  = _MG_CFG.perplexity_sem_companion   # default 0.26
+
+        if sem_dist > _sd_thr:
             return 1, "untrusted", True, (
-                f"[ETVL:SEM_DIST] Adversarial centroid similarity: {sem_dist:.3f} > 0.48"
+                f"[ETVL:SEM_DIST] Adversarial centroid similarity: {sem_dist:.3f} > {_sd_thr}"
             )
-        if imp_den > 0.25:
+        if imp_den > _id_thr:
             return 1, "untrusted", True, (
-                f"[ETVL:IMP_DEN] Imperative density: {imp_den:.3f} > 0.25"
+                f"[ETVL:IMP_DEN] Imperative density: {imp_den:.3f} > {_id_thr}"
             )
-        # Compound perplexity gate — calibrated 2026-07 against 8 benign
-        # edge-case log types (session tokens, JWTs, IPs, health checks, etc.).
-        # sem_dist companion raised from 0.20 to 0.26 after session_token_hex
-        # (PP=2787, sem_dist=0.234) triggered a false positive at 0.20.
-        # All 8 benign edge cases pass at perplexity > 1500 AND sem_dist > 0.26.
+        # Compound perplexity gate. Calibrated 2026-07 against 8 benign edge-case
+        # log types. sem_dist companion raised 0.20 -> 0.26 after session_token_hex FP.
         # (See tests/test_memory_guard.py::TestPerplexityThreshold)
-        if perplexity > 1500.0 and sem_dist > 0.26:
+        if perplexity > _pp_thr and sem_dist > _pp_sd:
             return 1, "untrusted", True, (
                 f"[ETVL:PERPLEXITY] Anomaly ({perplexity:.0f}) + elevated sim ({sem_dist:.3f})"
             )
@@ -469,13 +490,15 @@ class MemoryGuard:
             # External: start at LOW, decay with hops (floor at 1)
             base_level = max(2, 2 - (provenance_hops - 1))
 
-        # ── Secondary risk factors (soft downgrade, not hard quarantine) ──────
-        # entropy > 5.2: benign mean 4.6, std 0.16 → ~4σ above benign mean
+        # -- Secondary risk factors (soft downgrade, not hard quarantine) --
+        # Thresholds from config/settings.yaml (memory_guard section).
+        _ent_thr = _MG_CFG.entropy_soft_threshold       # default 5.2
+        _ent_sd  = _MG_CFG.entropy_soft_sem_companion   # default 0.35
         reason = f"[CLEAN] Source={source}, hops={provenance_hops}, all features within bounds"
-        if entropy > 5.2:
+        if entropy > _ent_thr:
             base_level = max(1, base_level - 1)
             reason = f"[SOFT:ENTROPY] High entropy {entropy:.2f} + source={source}"
-        elif sem_dist > 0.35:
+        elif sem_dist > _ent_sd:
             # Moderate similarity: soft downgrade (passes, but lower trust)
             base_level = max(2, base_level - 1)
             reason = f"[SOFT:SEM_DIST] Moderate similarity {sem_dist:.3f} + source={source}"

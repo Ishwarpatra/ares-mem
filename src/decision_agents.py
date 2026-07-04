@@ -10,10 +10,29 @@ ResponseAgent: Executes the governed decision via simulated infrastructure APIs.
 Design: Both agents are deterministic policy-table driven (no LLM stochasticity).
 """
 import time
+import sys
+import os
 from typing import Any, Dict, cast
 
 from base import BaseAgent
 from models import ThreatAnalysis, Decision, ExecutionResult
+
+# Load decision thresholds from config/settings.yaml
+_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
+if _CONFIG_DIR not in sys.path:
+    sys.path.insert(0, _CONFIG_DIR)
+try:
+    from settings import SETTINGS as _SETTINGS
+    _DA_CFG = _SETTINGS.decision_agent
+except Exception:
+    import types
+    _DA_CFG = types.SimpleNamespace(
+        block_threshold=80,
+        escalate_threshold=60,
+        escalate_confidence_max=0.4,
+        quarantine_threshold=50,
+        alert_threshold=20,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -58,27 +77,28 @@ class DecisionAgent(BaseAgent):
         threat_type: str = analysis.get("threat_type", "BENIGN")
         recommended: str = analysis.get("recommended_action", "LOG_ONLY")
 
-        # ── Policy evaluation ────────────────────────────────────────────────
+        # -- Policy evaluation --
+        # Thresholds from config/settings.yaml (decision_agent section).
         requires_escalation = False
 
-        if risk_score > 80:
+        if risk_score > _DA_CFG.block_threshold:
             decision = "BLOCK_IP"
             action = f"Immediately block source IP via firewall API. Threat: {threat_type}"
             task_type = "block_ip"
             priority = "CRITICAL"
-        elif risk_score > 60 and confidence < 0.4:
+        elif risk_score > _DA_CFG.escalate_threshold and confidence < _DA_CFG.escalate_confidence_max:
             # Ambiguous high-risk: requires human judgement
             decision = "ESCALATE"
             action = f"Escalate to SOC analyst for review. Score: {risk_score}, Confidence: {confidence}"
             task_type = "notify"
             priority = "HIGH"
             requires_escalation = True
-        elif risk_score > 50:
+        elif risk_score > _DA_CFG.quarantine_threshold:
             decision = "QUARANTINE"
             action = f"Isolate source host/session from network segment. Threat: {threat_type}"
             task_type = "quarantine"
             priority = "HIGH"
-        elif risk_score > 20:
+        elif risk_score > _DA_CFG.alert_threshold:
             decision = "ALERT"
             action = f"Send SOC alert notification. Risk score: {risk_score}"
             task_type = "notify"

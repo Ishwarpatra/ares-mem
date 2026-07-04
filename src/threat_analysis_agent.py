@@ -10,10 +10,28 @@ Responsibilities:
 Design constraint: deterministic, reproducible scoring (no LLM stochasticity).
 Satisfies the "temperature=0.0" and "n=100 trial" methodology requirements.
 """
+import sys
+import os
 from typing import Any, Dict, List, cast
 
 from base import BaseAgent
 from models import StructuredLog, ThreatAnalysis, THREAT_SIGNATURES
+
+# Load scoring deltas from config/settings.yaml
+_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
+if _CONFIG_DIR not in sys.path:
+    sys.path.insert(0, _CONFIG_DIR)
+try:
+    from settings import SETTINGS as _SETTINGS
+    _TA_CFG = _SETTINGS.threat_analysis
+except Exception:
+    import types
+    _TA_CFG = types.SimpleNamespace(
+        malicious_ip_score=30,
+        privileged_port_score=15,
+        critical_severity_score=10,
+        multi_sig_bonus_per=5,
+    )
 
 
 # ── Known malicious IP ranges (example IOCs) ────────────────────────────────
@@ -80,29 +98,30 @@ class ThreatAnalysisAgent(BaseAgent):
                 for kw in matched_keywords[:3]:  # cap indicator list
                     indicators.append(f"{sig['threat_type']}: '{kw}'")
 
-        # ── 2. Known malicious IP ───────────────────────────────────────────
+        # -- 2. Known malicious IP --
+        # Scoring delta from config/settings.yaml (threat_analysis.malicious_ip_score)
         src_ip = structured_log.get("source_ip", "0.0.0.0")
         for prefix in _KNOWN_MALICIOUS_IP_PREFIXES:
             if src_ip.startswith(prefix):
-                risk_score += 30
+                risk_score += _TA_CFG.malicious_ip_score
                 indicators.append(f"Known malicious IP prefix: {prefix}")
                 break
 
-        # ── 3. Privileged port targeting ────────────────────────────────────
+        # -- 3. Privileged port targeting --
         port = structured_log.get("port", 0)
         if 0 < port < 1024:
-            risk_score += 15
+            risk_score += _TA_CFG.privileged_port_score
             indicators.append(f"Privileged port targeted: {port}")
 
-        # ── 4. Severity amplifier ───────────────────────────────────────────
+        # -- 4. Severity amplifier --
         severity = structured_log.get("severity", "LOW")
         if severity == "CRITICAL":
-            risk_score += 10
+            risk_score += _TA_CFG.critical_severity_score
             indicators.append("Log severity: CRITICAL")
 
-        # ── 5. Multi-indicator bonus ────────────────────────────────────────
+        # -- 5. Multi-indicator bonus --
         if len(matched_signatures) > 1:
-            bonus = (len(matched_signatures) - 1) * 5
+            bonus = (len(matched_signatures) - 1) * _TA_CFG.multi_sig_bonus_per
             risk_score += bonus
             indicators.append(f"Multi-signature correlation bonus: +{bonus}")
 
