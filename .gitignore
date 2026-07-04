@@ -69,6 +69,7 @@ env/
 
 # Local database and configuration
 chroma_data/
+src/chroma_data/
 .env
 eval/results/
 !eval/results/holdout_evaluation_summary.txt
