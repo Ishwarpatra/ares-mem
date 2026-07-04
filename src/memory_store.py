@@ -64,6 +64,10 @@ class MemoryStore:
             name="ares_quarantine",
             metadata={"description": "Flagged/untrusted traces — LOW/UNTRUSTED"}
         )
+        self.escalations = self.client.get_or_create_collection(
+            name="ares_escalations",
+            metadata={"description": "Durable registry for escalation review tickets"}
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Write Operations
