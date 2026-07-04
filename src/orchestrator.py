@@ -32,6 +32,12 @@ from models import StructuredLog, ThreatAnalysis, Decision, ExecutionResult
 
 load_dotenv()
 
+import logging
+import json
+logger = logging.getLogger("ares_orchestrator")
+
+
+from config import SETTINGS
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. Shared State Schema
@@ -46,6 +52,8 @@ class AgentState(TypedDict, total=False):
     """
     # ── Input ──────────────────────────────────────────────────────────────
     raw_log: str                            # Raw log string from data pipeline
+    source: str                             # Trust source tier (system, internal, external)
+    provenance_hops: int                    # Chain-of-custody depth
 
     # ── Layer 1 outputs ────────────────────────────────────────────────────
     structured_log: StructuredLog          # Parsed log from LogIngestionAgent
@@ -115,7 +123,7 @@ _store       = MemoryStore()
 def ingestion_node(state: AgentState) -> Dict[str, Any]:
     """Layer 1: Parse raw log into StructuredLog."""
     print("[Node: ingest] Ingesting log...")
-    raw_log = cast(str, state.get("raw_log", ""))
+    raw_log = state.get("raw_log", "")
     structured = _ingestor.ingest_log(raw_log)
     return {
         "structured_log": structured,
@@ -126,11 +134,13 @@ def ingestion_node(state: AgentState) -> Dict[str, Any]:
 def memory_guard_validation_node(state: AgentState) -> Dict[str, Any]:
     """Layer 1: Validate incoming log trust tier and check for injections."""
     print("[Node: memory_guard_val] Validating raw log...")
-    raw_log = cast(str, state.get("raw_log", ""))
+    raw_log = state.get("raw_log", "")
+    source = state.get("source", "external")
+    provenance_hops = state.get("provenance_hops", 1)
     validated = _guard.validate_and_tag(
         raw_log,
-        source="external",
-        provenance_hops=1
+        source=source,
+        provenance_hops=provenance_hops
     )
     quarantine_flag = validated.get("quarantine", False)
     priv_level = validated.get("privilege_level", 3)
@@ -162,30 +172,84 @@ def threat_analysis_node(state: AgentState) -> Dict[str, Any]:
     }
 
 
+def _log_decision_json(state: AgentState, decision: Decision):
+    import time
+    log_payload = {
+        "timestamp": time.time(),
+        "node": "decision_node",
+        "raw_log_preview": state.get("raw_log", "")[:100],
+        "validation_flag": state.get("validation_flag", False),
+        "decision": decision.get("decision"),
+        "action": decision.get("action"),
+        "priority": decision.get("priority"),
+        "requires_escalation": decision.get("requires_escalation")
+    }
+    logger.info("DECISION_LOG_JSON: %s", json.dumps(log_payload))
+
+
 def decision_node(state: AgentState) -> Dict[str, Any]:
     """Layer 2: Evaluate threat against policy matrix."""
     print("[Node: decide] Making decision...")
     
     # CRITICAL GATE: if the Memory Guard quarantined this log (validation_flag is True),
-    # force a safe fallback action (LOG_ONLY/no_action) to prevent acting on poisoned content.
+    # branch based on the configured policy action: LOG_ONLY or active QUARANTINE_HOST response.
     if state.get("validation_flag") is True:
-        decision: Decision = {
-            "decision": "LOG_ONLY",
-            "action": "no_action",
-            "task_type": "log_analysis",
-            "priority": "LOW",
-            "requires_escalation": False,
-            "rationale": "Memory Guard quarantined this log. Threat assessment bypassed. Safe fallback applied.",
-        }
-        return {
-            "decision": decision,
-            "history": [
-                "[decide] Memory Guard quarantined this log. Safe fallback applied: LOG_ONLY/no_action."
-            ]
-        }
+        action_policy = SETTINGS.policy_rules.quarantine_action
+        if action_policy == "QUARANTINE_HOST":
+            # Active Response: quarantine host and register ticket durably
+            threat_analysis = cast(ThreatAnalysis, state.get("threat_analysis")) or {}
+            ticket = _overseer.escalate_quarantine(
+                decision={
+                    "decision": "QUARANTINE_HOST",
+                    "action": "network_isolation",
+                    "rationale": "Memory Guard quarantined this log. Active Response QUARANTINE_HOST triggered.",
+                },
+                context={
+                    "risk_score": 100,
+                    "confidence": 1.0,
+                    "threat_type": "PROMPT_INJECTION",
+                    "indicators": ["ETVL_quarantine_flag"],
+                    "raw_log": state.get("raw_log", ""),
+                    "source_ip": (state.get("structured_log") or {}).get("source_ip", "UNKNOWN"),
+                }
+            )
+            decision: Decision = {
+                "decision": "QUARANTINE_HOST",
+                "action": "network_isolation",
+                "task_type": "mitigation",
+                "priority": "CRITICAL",
+                "requires_escalation": True,
+                "rationale": f"Memory Guard quarantined this log. Active response QUARANTINE_HOST executed. Ticket: {ticket.get('ticket_id')}",
+            }
+            _log_decision_json(state, decision)
+            return {
+                "decision": decision,
+                "escalation_result": {"quarantine_ticket": ticket, "escalation_required": True},
+                "history": [
+                    f"[decide] Memory Guard quarantined this log. Active Response: QUARANTINE_HOST. Ticket: {ticket.get('ticket_id')}"
+                ]
+            }
+        else:
+            # Fallback safe default: LOG_ONLY
+            decision: Decision = {
+                "decision": "LOG_ONLY",
+                "action": "no_action",
+                "task_type": "log_analysis",
+                "priority": "LOW",
+                "requires_escalation": False,
+                "rationale": "Memory Guard quarantined this log. Threat assessment bypassed. Safe fallback applied.",
+            }
+            _log_decision_json(state, decision)
+            return {
+                "decision": decision,
+                "history": [
+                    "[decide] Memory Guard quarantined this log. Safe fallback applied: LOG_ONLY/no_action."
+                ]
+            }
 
     threat_analysis = cast(ThreatAnalysis, state.get("threat_analysis"))
     decision = _commander.decide(threat_analysis)
+    _log_decision_json(state, decision)
     return {
         "decision": decision,
         "history":  [f"[decide] decision={decision.get('decision')}, priority={decision.get('priority')}"]
@@ -372,12 +436,14 @@ ares_app = build_graph()
 # 6. Public Entry Point
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_ares(log_text: str) -> Dict[str, Any]:
+def run_ares(log_text: str, source: str = "external", provenance_hops: int = 1) -> Dict[str, Any]:
     """
     Entry point to run the ARES-Mem orchestration pipeline.
 
     Args:
         log_text: Raw log string to process.
+        source: Trust source tier (system, internal, external).
+        provenance_hops: Hop count in chain of custody.
 
     Returns:
         Final AgentState dict after all nodes have executed.
@@ -385,6 +451,8 @@ def run_ares(log_text: str) -> Dict[str, Any]:
     initial_state: AgentState = {
         "raw_log": log_text,
         "history": [],
+        "source": source,
+        "provenance_hops": provenance_hops,
     }
     res = ares_app.invoke(initial_state)
     
