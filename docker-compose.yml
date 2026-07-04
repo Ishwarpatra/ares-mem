@@ -23,6 +23,8 @@ services:
   # ── ARES Orchestrator ──────────────────────────────────────────
   agent_orchestrator:
     build: .
+    ports:
+      - "8080:8080"
     environment:
       - CHROMA_HOST=semantic_memory
       - CHROMA_PORT=8000
@@ -39,8 +41,8 @@ services:
       sh -c "
         echo '[ARES] ChromaDB is healthy. Starting validation suite...' &&
         pytest tests/ --verbose --tb=short &&
-        echo '[ARES] All tests passed. Starting main pipeline...' &&
-        python src/main.py
+        echo '[ARES] All tests passed. Starting API Service...' &&
+        python src/service.py
       "
 
 networks:
