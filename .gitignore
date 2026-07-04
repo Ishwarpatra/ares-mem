@@ -77,3 +77,7 @@ eval/results/
 
 # Local Ollama model store
 .ollama/
+
+# Node.js (docx report generator — local tool only, not part of Python project)
+node_modules/
+package-lock.json
