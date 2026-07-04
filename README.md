@@ -131,7 +131,7 @@ tests/test_no_corpus_leakage.py ✓ 4 tests — Automated leakage & signature CI
 
 | Feature | Method | Threshold | Action |
 |---|---|---|---|
-| Semantic Distance | Cosine similarity to 15-seed adversarial centroid | > 0.48 | QUARANTINE |
+| Semantic Distance | Max similarity to 5 family-specific centroids | > 0.48 | QUARANTINE |
 | Imperative Density | POS-tagging / keyword heuristic | > 0.25 | QUARANTINE |
 | Perplexity | Character-level bigram model | > 1500 AND sem_dist > 0.26 (compound) | QUARANTINE |
 | Shannon Entropy | Byte-level entropy | > 5.2 | Soft privilege downgrade (not hard quarantine) |
@@ -191,3 +191,13 @@ ares-mem/
 2. **Latency Overhead** — The `ResponseAgent` and `main.py` both measure and report per-action latency in milliseconds. The Memory Guard's feature extraction pipeline latency is tracked via `BaseAgent.run()`.
 
 3. **Data Provenance Spoofing** — Tag spoofing is addressed by the `TestPrivilegeEscalationAttempts` test class. Privilege assignment is based on the validated `source` parameter (set by the trusted ingestion layer), not on log content.
+
+---
+
+## Configuration Precedence
+
+ARES-Mem loads its operational thresholds and parameters in the following priority order (highest to lowest):
+1. **Environment Override**: The `ARES_CONFIG_PATH` environment variable can specify a custom settings YAML file path.
+2. **Local YAML Configuration**: If the env var is absent, loads from [config/settings.yaml](file:///c:/Users/DELL/Desktop/codego/ares-mem/config/settings.yaml).
+3. **Hardcoded Defaults**: If the YAML file is absent or fails to load, falls back on typed defaults co-located in [config/settings.py](file:///c:/Users/DELL/Desktop/codego/ares-mem/config/settings.py).
+
