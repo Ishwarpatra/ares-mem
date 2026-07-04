@@ -1,0 +1,26 @@
+{
+  "name": "ares-mem",
+  "version": "1.0.0",
+  "description": "**Autonomous Resilient Episodic Security Memory — Research Prototype for Adversarial Memory Filtration & Multi-Agent Cybersecurity Defense**",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ishwarpatra/ares-mem.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Ishwarpatra/ares-mem/issues"
+  },
+  "homepage": "https://github.com/Ishwarpatra/ares-mem#readme",
+  "dependencies": {
+    "docx": "^9.7.1"
+  }
+}
