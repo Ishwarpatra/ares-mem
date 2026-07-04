@@ -17,21 +17,12 @@ from typing import Any, Dict, List, cast
 from base import BaseAgent
 from models import StructuredLog, ThreatAnalysis, THREAT_SIGNATURES
 
-# Load scoring deltas from config/settings.yaml
-_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
-if _CONFIG_DIR not in sys.path:
-    sys.path.insert(0, _CONFIG_DIR)
-try:
-    from settings import SETTINGS as _SETTINGS
-    _TA_CFG = _SETTINGS.threat_analysis
-except Exception:
-    import types
-    _TA_CFG = types.SimpleNamespace(
-        malicious_ip_score=30,
-        privileged_port_score=15,
-        critical_severity_score=10,
-        multi_sig_bonus_per=5,
-    )
+# Load scoring deltas from config package
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from config import SETTINGS
+_TA_CFG = SETTINGS.threat_analysis
 
 
 # ── Known malicious IP ranges (example IOCs) ────────────────────────────────

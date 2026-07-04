@@ -36,23 +36,12 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 
-# Config loader — load thresholds from config/settings.yaml
-_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
-if _CONFIG_DIR not in sys.path:
-    sys.path.insert(0, _CONFIG_DIR)
-try:
-    from settings import SETTINGS as _SETTINGS
-    _MG_CFG = _SETTINGS.memory_guard
-except Exception:  # pragma: no cover — fallback keeps tests isolated
-    import types
-    _MG_CFG = types.SimpleNamespace(
-        sem_dist_threshold=0.48,
-        imp_den_threshold=0.25,
-        perplexity_threshold=1500.0,
-        perplexity_sem_companion=0.26,
-        entropy_soft_threshold=5.2,
-        entropy_soft_sem_companion=0.35,
-    )
+# Config loader — load thresholds from config package
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from config import SETTINGS
+_MG_CFG = SETTINGS.memory_guard
 
 # spaCy with graceful fallback
 try:

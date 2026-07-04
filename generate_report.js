@@ -17,6 +17,14 @@ const {
   PageBreak, PageNumber, Footer, Header,
 } = require("docx");
 const fs = require("fs");
+const { execSync } = require("child_process");
+
+let commitHash = "unknown";
+try {
+  commitHash = execSync("git rev-parse --short HEAD").toString().trim();
+} catch (e) {
+  // fallback if git is not available
+}
 
 // ─── Design Constants ────────────────────────────────────────────────────────
 const FONT     = "Calibri";
@@ -146,7 +154,7 @@ function coverTable() {
   const rows = [
     ["Author",      "Md Yasir Junaid"],
     ["System",      "ARES-Mem — Autonomous Resilient Episodic Security Memory"],
-    ["Repository",  "github.com/Ishwarpatra/ares-mem  (branch: main, commit: 41a5910)"],
+    ["Repository",  `github.com/Ishwarpatra/ares-mem  (branch: main, commit: ${commitHash})`],
     ["Report Type", "LLM / SLM Candidate Model Selection — Data Science Segment"],
     ["Scope",       "Audit Validation + All 6 Agents: Model Comparison Plan"],
     ["Date",        "July 2026"],
@@ -174,6 +182,9 @@ function auditValidationSection() {
     bullet("ARES_Mem_SDK_Research_v2.pdf  — Architecture, ADK integration rationale, and design decisions", true),
     bullet("ARES_Mem_1Month_WorkPlan.pdf   — Monthly deliverable schedule and milestone mapping", true),
     bullet("Mem_Sandboxing_ARES.pdf        — Memory sandboxing threat model and ETVL pipeline specification", true),
+    bodyPara(
+      "Note: PDF documents were submitted separately alongside this repository and are not tracked in version control (see .gitignore)."
+    ),
 
     h2("1.2 Resolved Findings"),
     tbl(
@@ -627,7 +638,97 @@ function recommendationMatrix() {
   ];
 }
 
+// ─── Section 5: Research Integrity & Known Limitations ──────────────────────
+function integrityLimitationsSection() {
+  return [
+    pageBreak(),
+    h1("Part V — Research Integrity & Known Limitations"),
+    bodyPara(
+      "This section details the critical security research limitations identified during subsequent audit reviews, specifically regarding the test-set leakage in MemoryGuard's detection layer, and publishes the empirical generalization performance against the new 45-entry held-out adversarial corpus."
+    ),
+
+    h2("5.1 Verbatim Signature Layer Leakage"),
+    bodyPara(
+      "During technical auditing, a critical test-set leakage issue was identified: the MemoryGuard quarantine layer previously used exact keyword blocklists (e.g. 'pre-approved and whitelisted', 'trust_tier=verified_internal') that were derived verbatim from the synthetic test corpus. This resulted in an artificially inflated 96.0% detection rate on the training corpus (Table 1.3), which measured pattern memorization rather than true semantic generalization."
+    ),
+    bodyPara(
+      "To address this, the codebase has been refactored into a two-tier architecture: Tier 1 (Signature Blocklist) and Tier 2 (ETVL Statistical/Semantic Pipeline). Tier 1 handles fast signature-matching of known attack patterns but has zero generalization. Tier 2 uses ETVL statistical metrics (semantic distance, imperative verb density, and bigram perplexity) to generalize to unseen, reworded attacks. Importantly, the existing corpus-derived phrases from the audit findings remain in the Tier 1 signature layer by design to act as a baseline blocklist. The automated CI test (tests/test_no_corpus_leakage.py) validates this separation: it grandfatheres in the known leaked keywords, but strictly blocks any new corpus-derived phrases from being introduced to the signature layer or holdout set."
+    ),
+
+    h2("5.2 First-Party Holdout Corpus Generalization Metrics"),
+    bodyPara(
+      "To obtain an honest, leak-free evaluation of generalization capability, a held-out adversarial corpus of 45 reworded entries was constructed. No phrase in the holdout corpus has a substring overlap (>= 30 characters) with the training corpus templates or heuristic keyword lists, as verified programmatically by tests/test_no_corpus_leakage.py (which fails CI on any new overlaps). The first-party results are compiled below:"
+    ),
+    tbl(
+      [
+        trow([
+          tc("Metric", { header: true, width: 4420 }),
+          tc("Value", { header: true, width: 4420 }),
+        ]),
+        ...[
+          ["Holdout Corpus Size", "45 adversarial entries"],
+          ["Memory Guard quarantined (MG-holdout-DR)", "5 / 45  (11.1%)"],
+          ["  - via Signature Layer (Tier 1)", "0 / 45  (0.0%)"],
+          ["  - via ETVL Semantic Layer (Tier 2)", "5 / 45  (11.1%)"],
+          ["Memory Guard holdout ASR [lower=better]", "88.9%"],
+          ["Pipeline quarantined (Pipeline-holdout-DR)", "6 / 45  (13.3%)"],
+          ["  - via ThreatAnalysis generic keywords (Tier 3)", "1 / 45  (2.2%)"],
+          ["Pipeline holdout ASR [lower=better]", "86.7%"],
+        ].map(([m, v], i) =>
+          trow([
+            tc(m, { width: 4420, stripe: i % 2 === 1, bold: m.includes("ASR") || m.includes("quarantined") }),
+            tc(v, { width: 4420, stripe: i % 2 === 1, bold: m.includes("ASR") || m.includes("quarantined") }),
+          ])
+        ),
+      ],
+      [4420, 4420]
+    ),
+    caption("Table 5.1 — First-party empirical generalization metrics against the held-out adversarial corpus."),
+
+    h2("5.3 Per-Family Generalization Performance Breakdown"),
+    bodyPara(
+      "The breakdown of the detection rate (Recall) across the 5 reworded attack families in the holdout corpus shows significant variance in the ETVL semantic layer's capabilities:"
+    ),
+    tbl(
+      [
+        trow([
+          tc("Attack Family", { header: true, width: 2940 }),
+          tc("Memory Guard (ETVL)", { header: true, width: 2940 }),
+          tc("Pipeline (MG + ThreatSig)", { header: true, width: 2960 }),
+        ]),
+        ...[
+          ["AUTHORITY_SPOOFING",   "0/10 (0%)",  "0/10 (0%)"],
+          ["DIRECT_OVERRIDE",       "1/5 (20%)",  "2/5 (40%)"],
+          ["OBFUSCATED_INJECTION",  "0/10 (0%)",  "0/10 (0%)"],
+          ["TAG_SPOOFING",          "4/10 (40%)", "4/10 (40%)"],
+          ["WHITELIST_DOWNGRADE",   "0/10 (0%)",  "0/10 (0%)"],
+        ].map(([f, m, p], i) =>
+          trow([
+            tc(f, { width: 2940, stripe: i % 2 === 1, bold: true }),
+            tc(m, { width: 2940, stripe: i % 2 === 1 }),
+            tc(p, { width: 2960, stripe: i % 2 === 1 }),
+          ])
+        ),
+      ],
+      [2940, 2940, 2960]
+    ),
+    caption("Table 5.2 — Generalization rate (Recall) by attack family against held-out reworded payloads."),
+
+    h2("5.4 Analysis of Generalization Gap and Mitigation Plan"),
+    bodyPara(
+      "The generalization gap is severe (96.0% training detection vs. 11.1% holdout detection). Because holdout payloads contain zero verbatim overlap with training templates, the exact-match signature layer (Tier 1) correctly caught 0% of them. The remaining 11.1% (5 detections) were caught entirely by ETVL's semantic and perplexity features (Tier 2). Under ETVL, TAG_SPOOFING (40% DR) was most detectable due to its anomalous syntax structure, whereas natural-language-like families (AUTHORITY_SPOOFING, WHITELIST_DOWNGRADE) bypassed ETVL thresholds entirely."
+    ),
+    bodyPara(
+      "This empirical evidence demonstrates that heuristic-based security guards cannot generalize to reworded adversarial instructions. To mitigate this and raise out-of-corpus generalization rate to the target ≥ 90%, the following path is established:"
+    ),
+    bullet("Fine-tune the SentenceTransformer: The resident encoder (all-MiniLM-L6-v2) must be trained on a specialized security-contrastive dataset containing adversarial prompt injection vectors, increasing the semantic separation boundary.", true),
+    bullet("Deploy a Lightweight LLM Gatekeeper: Replace the rule-based ETVL metrics with a fast, quantized local SLM (e.g. Qwen2.5-0.5B-Instruct, VRAM < 1GB) at the Vector DB ingestion gate, running with temperature=0.0 and a strict binary classification schema.", true),
+    spacer(),
+  ];
+}
+
 // ─── Assemble Document ────────────────────────────────────────────────────────
+
 function buildDocument() {
   const children = [
     // ── Cover ──
@@ -661,6 +762,7 @@ function buildDocument() {
       "  Agent 5: ResponseAgent (The Muscle)",
       "  Agent 6: HumanEscalationAgent (The Oversight)",
       "Part IV — Cross-Agent Recommendation Matrix",
+      "Part V  — Research Integrity & Known Limitations",
     ].map(t => para(t, { after: 80 })),
     hr(),
 
@@ -674,6 +776,7 @@ function buildDocument() {
     ...agent5Section(),
     ...agent6Section(),
     ...recommendationMatrix(),
+    ...integrityLimitationsSection(),
 
     // ── End ──
     pageBreak(),

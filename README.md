@@ -111,12 +111,13 @@ pytest tests/test_orchestrator.py -v
 ### Expected Results
 
 ```
-tests/test_memory_guard.py      ✓ 25 tests — All feature extraction validated
+tests/test_memory_guard.py      ✓ 32 tests — All feature extraction & perplexity validated
 tests/test_agents.py            ✓ 37 tests — All agents deterministic
 tests/test_memory_store.py      ✓ 15 tests — ACL routing verified
 tests/test_orchestrator.py      ✓ 13 tests — Full pipeline end-to-end
 tests/test_adversarial_asr.py   ✓ 14 tests — Adversarial ASR testing
 tests/test_evaluation.py        ✓ 29 tests — Evaluation metrics verified
+tests/test_no_corpus_leakage.py ✓ 4 tests — Automated leakage & signature CI gate
 ```
 
 ---

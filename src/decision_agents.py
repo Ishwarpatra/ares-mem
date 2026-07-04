@@ -17,22 +17,12 @@ from typing import Any, Dict, cast
 from base import BaseAgent
 from models import ThreatAnalysis, Decision, ExecutionResult
 
-# Load decision thresholds from config/settings.yaml
-_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
-if _CONFIG_DIR not in sys.path:
-    sys.path.insert(0, _CONFIG_DIR)
-try:
-    from settings import SETTINGS as _SETTINGS
-    _DA_CFG = _SETTINGS.decision_agent
-except Exception:
-    import types
-    _DA_CFG = types.SimpleNamespace(
-        block_threshold=80,
-        escalate_threshold=60,
-        escalate_confidence_max=0.4,
-        quarantine_threshold=50,
-        alert_threshold=20,
-    )
+# Load decision thresholds from config package
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from config import SETTINGS
+_DA_CFG = SETTINGS.decision_agent
 
 
 # ══════════════════════════════════════════════════════════════════════════════
