@@ -31,8 +31,8 @@ def run_load_test():
         [sys.executable, "-m", "uvicorn", "service:app", "--host", "127.0.0.1", "--port", str(port)],
         cwd=os.path.join(_REPO_ROOT, "src"),
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
     )
     
     # Wait for service to become responsive
