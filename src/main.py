@@ -16,10 +16,9 @@ from dotenv import load_dotenv
 
 # Reconfigure stdout on Windows to prevent UnicodeEncodeError in legacy consoles
 if sys.platform.startswith("win"):
-    try:
-        sys.stdout.reconfigure(errors="replace")
-    except AttributeError:
-        pass
+    reconfig = getattr(sys.stdout, "reconfigure", None)
+    if reconfig is not None:
+        reconfig(errors="replace")
 
 load_dotenv()
 

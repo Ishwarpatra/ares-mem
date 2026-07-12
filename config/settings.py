@@ -15,7 +15,7 @@ Usage:
 """
 import os
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # ── Default values (mirror of config/settings.yaml) ──────────────────────────
 # These are the fallback values used when settings.yaml is not present.
@@ -64,7 +64,7 @@ def _dict_to_namespace(d: Dict[str, Any]) -> SimpleNamespace:
     return ns
 
 
-def load_settings(config_path: str = None) -> SimpleNamespace:
+def load_settings(config_path: Optional[str] = None) -> SimpleNamespace:
     """
     Load settings from YAML, falling back to hardcoded defaults.
 

@@ -21,7 +21,7 @@ from models import ThreatAnalysis, Decision, ExecutionResult
 
 _WEBHOOK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
-def _send_webhook_async(url: str, payload: dict, logger):
+def _send_webhook_async(url: str, payload: Decision, logger):
     try:
         # Enforce strict 2-second HTTP connection/response timeout
         res = requests.post(url, json=payload, timeout=2.0)

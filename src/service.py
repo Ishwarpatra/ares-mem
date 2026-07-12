@@ -91,8 +91,11 @@ def list_escalations(cred: Dict[str, Any] = Depends(authenticate_key)):
     for ticket_id, meta, doc in zip(ids, metadatas, documents):
         if not meta:
             continue
-        indicators_str = meta.get("matched_indicators", "")
-        indicators = indicators_str.split(",") if indicators_str else []
+        indicators_str = meta.get("matched_indicators")
+        if isinstance(indicators_str, str) and indicators_str:
+            indicators = indicators_str.split(",")
+        else:
+            indicators = []
         tickets.append({
             "ticket_id": meta.get("ticket_id"),
             "severity": meta.get("severity"),
@@ -127,8 +130,13 @@ def resolve_ticket(
     if not res or not res.get("ids"):
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found.")
         
-    meta = res["metadatas"][0]
-    doc = res["documents"][0]
+    metadatas = res.get("metadatas")
+    documents = res.get("documents")
+    if not metadatas or not documents or metadatas[0] is None or documents[0] is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} metadata or document missing.")
+        
+    meta = dict(metadatas[0])
+    doc = documents[0]
     
     meta["status"] = req.status
     meta["resolution_notes"] = req.resolution_notes
@@ -177,7 +185,12 @@ def list_quarantine(cred: Dict[str, Any] = Depends(authenticate_key)):
 def get_metrics(cred: Dict[str, Any] = Depends(authenticate_key)):
     esc_res = store.escalations.get()
     tickets_count = len(esc_res.get("ids") or [])
-    resolved_count = len([m for m in (esc_res.get("metadatas") or []) if m and m.get("status", "").startswith("RESOLVED")])
+    resolved_count = 0
+    for m in (esc_res.get("metadatas") or []):
+        if m:
+            status = m.get("status")
+            if isinstance(status, str) and status.startswith("RESOLVED"):
+                resolved_count += 1
     return {
         "memory_count": store.collection.count(),
         "quarantine_count": store.quarantine.count(),

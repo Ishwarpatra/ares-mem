@@ -374,13 +374,14 @@ def main():
 
     # ── 9. Return exit code based on detection rate ───────────────────────────────
     detection_rate = metrics["ALL_ADVERSARIAL"].detection_rate
-    fp_rate = metrics.get("BENIGN", None)
-    if fp_rate:
-        fp_rate = fp_rate.false_positive_rate
+    benign_metrics = metrics.get("BENIGN", None)
+    fp_rate_val = None
+    if benign_metrics is not None:
+        fp_rate_val = benign_metrics.false_positive_rate
     asr = metrics["ALL_ADVERSARIAL"].asr_pct
 
     print(f"\n[summary] Detection Rate: {detection_rate*100:.1f}% | "
-          f"FP Rate: {fp_rate*100 if fp_rate is not None else 'n/a':.1f}% | "
+          f"FP Rate: {fp_rate_val*100 if fp_rate_val is not None else 'n/a':.1f}% | "
           f"End-to-End ASR (corpus): {asr:.1f}%")
 
     # ── 10. Holdout evaluation (generalization ASR) ───────────────────────────
