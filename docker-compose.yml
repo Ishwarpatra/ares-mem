@@ -15,7 +15,7 @@ services:
       - CHROMA_HOST=semantic_memory
       - CHROMA_PORT=8000
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_API_BASE=${OPENAI_API_BASE}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
     depends_on:
       - semantic_memory
     networks:

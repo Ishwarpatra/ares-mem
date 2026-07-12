@@ -1,6 +1,7 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
+import json
 import os
 
 class ThreatAnalysisAgent:
@@ -30,5 +31,3 @@ class ThreatAnalysisAgent:
             return analysis
         except Exception as e:
             return {"error": f"Threat analysis failed: {str(e)}", "risk_score": 50} # Default to medium risk on error
-
-import json
