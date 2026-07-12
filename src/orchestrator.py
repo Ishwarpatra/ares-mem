@@ -23,21 +23,38 @@ class AgentState(TypedDict, total=False):
     history:           Annotated[List[str], operator.add]
     pipeline_error:    Optional[str]   # Propagates error context if any node fails
 
-# 2. Initialize Agents and Services
-ingestor      = LogIngestionAgent()
-threat_analyst = ThreatAnalysisAgent()
-commander     = DecisionAgent()
-muscle        = ResponseAgent()
-guard         = MemoryGuard()
-store         = MemoryStore()
-analyzer      = AnalyticsAgent()
+# 2. Lazy agent registry — agents are instantiated on first use, not at import time.
+#    This allows importing orchestrator.py without OPENAI_API_KEY being set,
+#    enabling unit tests, routing checks, and partial imports.
+_agents: Dict[str, Any] = {}
+
+def _get_agent(name: str):
+    """Returns a cached agent instance, creating it on first call."""
+    if name not in _agents:
+        if name == "ingestor":
+            _agents[name] = LogIngestionAgent()
+        elif name == "threat_analyst":
+            _agents[name] = ThreatAnalysisAgent()
+        elif name == "commander":
+            _agents[name] = DecisionAgent()
+        elif name == "muscle":
+            _agents[name] = ResponseAgent()
+        elif name == "guard":
+            _agents[name] = MemoryGuard()
+        elif name == "store":
+            _agents[name] = MemoryStore()
+        elif name == "analyzer":
+            _agents[name] = AnalyticsAgent()
+        else:
+            raise ValueError(f"Unknown agent: {name!r}")
+    return _agents[name]
 
 # 3. Define Node Functions
 
 def ingestion_node(state: AgentState) -> dict:
     print("[Node] Ingesting Log...")
     raw = state.get("raw_log", "")
-    structured = ingestor.ingest_log(raw)
+    structured = _get_agent("ingestor").ingest_log(raw)
     if "error" in structured:
         return {
             "structured_log": structured,
@@ -53,7 +70,7 @@ def threat_analysis_node(state: AgentState) -> dict:
     print("[Node] Analyzing Threats...")
     if state.get("pipeline_error"):
         return {"history": ["[SKIP] Threat analysis skipped due to upstream error"]}
-    analysis = threat_analyst.analyze(state.get("structured_log", {}))
+    analysis = _get_agent("threat_analyst").analyze(state.get("structured_log", {}))
     return {
         "threat_analysis": analysis,
         "history":         [f"Threat analysis complete: Score {analysis.get('risk_score')}"],
@@ -66,7 +83,7 @@ def decision_node(state: AgentState) -> dict:
             "decision": {"decision": "MANUAL_REVIEW", "action": "Pipeline error — human review required"},
             "history":  ["[SKIP] Decision skipped due to upstream error"],
         }
-    decision = commander.decide(state.get("threat_analysis", {}))
+    decision = _get_agent("commander").decide(state.get("threat_analysis", {}))
     return {
         "decision": decision,
         "history":  [f"Decision finalized: {decision.get('decision')}"],
@@ -74,7 +91,7 @@ def decision_node(state: AgentState) -> dict:
 
 def response_node(state: AgentState) -> dict:
     print("[Node] Executing Response...")
-    execution = muscle.execute(state.get("decision", {}))
+    execution = _get_agent("muscle").execute(state.get("decision", {}))
     return {
         "execution_result": execution,
         "history":          [f"Response executed: {execution.get('action')}"],
@@ -86,10 +103,10 @@ def manual_review_node(state: AgentState) -> dict:
     decision = state.get("decision", {})
     return {
         "execution_result": {
-            "status":  "PENDING_HUMAN_REVIEW",
-            "action":  decision.get("action", "No action — human review required"),
+            "status":   "PENDING_HUMAN_REVIEW",
+            "action":   decision.get("action", "No action — human review required"),
             "decision": decision.get("decision"),
-            "message": "This decision requires human analyst review before action is taken.",
+            "message":  "This decision requires human analyst review before action is taken.",
         },
         "history": ["[ESCALATE] Routed to human review queue"],
     }
@@ -105,6 +122,8 @@ def memory_guard_node(state: AgentState) -> dict:
         f"Risk: {risk_score} | "
         f"Decision: {decision_label}"
     )
+    guard = _get_agent("guard")
+    store = _get_agent("store")
     validation = guard.validate_trace(trace)
     store.add_memory(validation)
     return {
@@ -114,6 +133,8 @@ def memory_guard_node(state: AgentState) -> dict:
 
 def analytics_node(state: AgentState) -> dict:
     print("[Node] Generating Analytics...")
+    store    = _get_agent("store")
+    analyzer = _get_agent("analyzer")
 
     # Pull real historical data from the memory store
     memories = store.get_all_memories(limit=200)
@@ -125,22 +146,19 @@ def analytics_node(state: AgentState) -> dict:
         for m in memories
         if "risk_score" in m
     ]
-    # Append current event so the chart always shows at least one point
     trend_data.append({"risk_score": current_score, "timestamp": datetime.now()})
 
     analyzer.generate_risk_trend(trend_data)
 
-    # Build agent activity from current pipeline flags
     decision_label = state.get("decision", {}).get("decision", "")
     analyzer.generate_agent_activity({
         "Ingestion":  1,
         "Threat":     1,
         "Decision":   1,
         "Response":   1 if decision_label not in ("LOG_ONLY", "MANUAL_REVIEW") else 0,
-        "Escalation": 1 if decision_label == "MANUAL_REVIEW" else 0,
+        "Escalation": 1 if decision_label in ("MANUAL_REVIEW", "ESCALATE") else 0,
     })
 
-    # Generate trust-tier pie chart from stored memories
     if memories:
         analyzer.generate_memory_stats(memories)
 
@@ -162,21 +180,18 @@ def should_respond(state: AgentState) -> str:
 # 5. Build the Graph
 workflow = StateGraph(AgentState)
 
-# Nodes
-workflow.add_node("ingest",         ingestion_node)
-workflow.add_node("analyze",        threat_analysis_node)
-workflow.add_node("decide",         decision_node)
+workflow.add_node("ingest",           ingestion_node)
+workflow.add_node("analyze",          threat_analysis_node)
+workflow.add_node("decide",           decision_node)
 workflow.add_node("execute_response", response_node)
-workflow.add_node("manual_review",  manual_review_node)
-workflow.add_node("secure_memory",  memory_guard_node)
-workflow.add_node("analytics",      analytics_node)
+workflow.add_node("manual_review",    manual_review_node)
+workflow.add_node("secure_memory",    memory_guard_node)
+workflow.add_node("analytics",        analytics_node)
 
-# Edges
 workflow.set_entry_point("ingest")
 workflow.add_edge("ingest",   "analyze")
 workflow.add_edge("analyze",  "decide")
 
-# Conditional routing after decision
 workflow.add_conditional_edges(
     "decide",
     should_respond,
@@ -192,7 +207,6 @@ workflow.add_edge("manual_review",    "secure_memory")
 workflow.add_edge("secure_memory",    "analytics")
 workflow.add_edge("analytics",        END)
 
-# Compile
 ares_app = workflow.compile()
 
 def run_ares(log_text: str) -> dict:
