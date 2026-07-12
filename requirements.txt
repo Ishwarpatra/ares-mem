@@ -1,42 +1,20 @@
-# ============================================================
-# Project ARES-Mem — Python Dependencies
-# Frozen for empirical reproducibility (ASR testing compliance)
-# ============================================================
-
-# Orchestration & State Machine
-langgraph>=0.2.0
-langchain>=0.2.0
-langchain-community>=0.2.0
-langchain-core>=0.2.0
+# Orchestration & LLM
+langgraph==0.0.26
+langchain==0.1.12
+langchain-openai==0.1.1
 
 # Vector DB & Embeddings
-chromadb>=0.5.0,<0.6.0
-sentence-transformers>=2.7.0
-
-# Pydantic v2 required for DecisionSchema.model_dump() in adk_agents
-pydantic>=2.0
+chromadb==0.4.24
+sentence-transformers==2.5.1
 
 # Data Processing & ML Features
-numpy>=1.26.4
-scikit-learn>=1.4.1.post1
-
-# NLP for imperative density (optional, graceful fallback if unavailable)
-spacy>=3.7.4
-
-# Configuration & Environment
-python-dotenv>=1.0.1
-pyyaml>=6.0.1      # config/settings.yaml loader
+numpy==1.26.4
+scikit-learn==1.4.1.post1
+spacy==3.7.4
 
 # Testing & Engineering Standards
-pytest>=8.0.2
-pytest-cov>=5.0.0
-black>=24.2.0
-
-# Optional SDK integrations (graceful fallback if not installed)
-# google-adk
-# opensandbox
-
-# API Service & Web Dashboard
-fastapi>=0.100.0
-uvicorn>=0.20.0
-requests>=2.31.0
+pytest==8.0.2
+black==24.2.0
+python-dotenv==1.0.1
+opensandbox==0.1.8
+google-adk==0.1.0

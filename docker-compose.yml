@@ -1,49 +1,26 @@
 version: '3.8'
-
 services:
-  # ── Semantic Memory Store ──────────────────────────────────────
   semantic_memory:
-    image: chromadb/chroma:0.5.23
+    image: chromadb/chroma:latest
     ports:
       - "8000:8000"
     volumes:
       - ./chroma_data:/chroma/chroma
     networks:
       - ares_net
-    environment:
-      - IS_PERSISTENT=TRUE
-      - ALLOW_RESET=TRUE
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
-  # ── ARES Orchestrator ──────────────────────────────────────────
   agent_orchestrator:
     build: .
-    ports:
-      - "8080:8080"
     environment:
       - CHROMA_HOST=semantic_memory
       - CHROMA_PORT=8000
-      - PYTHONPATH=/app/src
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - ARES_ENV=docker
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
     depends_on:
-      semantic_memory:
-        condition: service_healthy
+      - semantic_memory
     networks:
       - ares_net
-    # Runs the full pytest suite on startup (TDD validation)
-    command: >
-      sh -c "
-        echo '[ARES] ChromaDB is healthy. Starting validation suite...' &&
-        pytest tests/ --verbose --tb=short &&
-        echo '[ARES] All tests passed. Starting API Service...' &&
-        python src/service.py
-      "
+    command: tail -f /dev/null # Keep alive for manual testing/execution
 
 networks:
   ares_net:
