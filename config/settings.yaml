@@ -13,7 +13,7 @@
 memory_guard:
   # Tier 2 ETVL — Semantic distance to adversarial centroid
   # Benign mean ~0.11; DIRECT_OVERRIDE mean ~0.51; boundary at 0.48
-  sem_dist_threshold: 0.48
+  sem_dist_threshold: 0.40
 
   # Tier 2 ETVL — Imperative verb density
   # Adversarial payloads with high command-verb density score > 0.25
