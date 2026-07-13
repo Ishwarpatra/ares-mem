@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.toast
+.unconfigured
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+nosetests.xml
+coverage.xml
+*,cover
+.hypothesis/
+
+# Databases & Vector DBs
+src/chroma_data/
+*.sqlite3
+*.db
+
+# Generated Analytics Graphs
+src/analytics/*.png
+
+# Local config & state
+.env
+src/data/feedback_log.json
+src/data/agent_trust_state.json
+
+# IDEs & System
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+.DS_Store
+Thumbs.db
