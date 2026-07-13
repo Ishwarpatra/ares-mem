@@ -32,6 +32,7 @@ src/analytics/*.png
 .env
 src/data/feedback_log.json
 src/data/agent_trust_state.json
+eval/results/eval_*.json
 
 # IDEs & System
 .idea/

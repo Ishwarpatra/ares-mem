@@ -1,0 +1,54 @@
+# =============================================================================
+# config/settings.yaml — ARES-Mem Runtime Configuration
+#
+# All operational thresholds are defined here. Override values without
+# touching source code. Load path can be overridden via ARES_CONFIG_PATH env.
+#
+# Threshold documentation:
+#   memory_guard.*   — ETVL adversarial filtration pipeline
+#   decision_agent.* — Policy matrix risk-score bands
+#   threat_analysis.*— Scoring deltas for the composite risk model
+# =============================================================================
+
+memory_guard:
+  # Tier 2 ETVL — Semantic distance to adversarial centroid
+  # Benign mean ~0.11; DIRECT_OVERRIDE mean ~0.51; boundary at 0.48
+  sem_dist_threshold: 0.48
+
+  # Tier 2 ETVL — Imperative verb density
+  # Adversarial payloads with high command-verb density score > 0.25
+  imp_den_threshold: 0.25
+
+  # Tier 2 ETVL — Compound perplexity gate
+  # Calibrated 2026-07-03: all 8 benign edge-case log types pass at these values.
+  # sem_dist companion raised from 0.20 -> 0.26 after session_token_hex FP
+  # (PP=2787, sem_dist=0.234) triggered a false positive at the 0.20 setting.
+  perplexity_threshold: 1500.0
+  perplexity_sem_companion: 0.40
+
+  # Soft downgrade (not quarantine) — benign mean 4.6 +/- 0.16, threshold ~4 sigma
+  entropy_soft_threshold: 5.2
+
+  # Moderate similarity soft downgrade boundary
+  entropy_soft_sem_companion: 0.35
+
+decision_agent:
+  # Risk score thresholds for policy matrix (0-100 scale)
+  block_threshold: 80        # > 80 -> BLOCK_IP
+  escalate_threshold: 60     # > 60 AND confidence < escalate_confidence_max -> ESCALATE
+  escalate_confidence_max: 0.4
+  quarantine_threshold: 50   # > 50 -> QUARANTINE
+  alert_threshold: 20        # > 20 -> ALERT, else LOG_ONLY
+
+threat_analysis:
+  # Scoring deltas for composite risk model
+  malicious_ip_score: 30     # Known malicious IP prefix match
+  privileged_port_score: 15  # Port < 1024 targeted
+  critical_severity_score: 10  # Severity == CRITICAL
+  multi_sig_bonus_per: 5     # Per additional signature matched beyond first
+
+policy_rules:
+  # Action to take when Memory Guard quarantines a log
+  # Options: LOG_ONLY (safe default) | QUARANTINE_HOST (active isolation response)
+  quarantine_action: "LOG_ONLY"
+  webhook_url: "http://localhost:8080/api/webhook/simulate"
