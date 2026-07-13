@@ -9,6 +9,11 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 # ── Privilege tier constants (5-tier) ───────────────────────────────────────
 PRIVILEGE_LEVELS: Dict[str, int] = {
+    "system":     5,
+    "high":       4,
+    "medium":     3,
+    "low":        2,
+    "untrusted":  1,
     "SYSTEM":     5,
     "HIGH":       4,
     "MEDIUM":     3,
@@ -16,70 +21,98 @@ PRIVILEGE_LEVELS: Dict[str, int] = {
     "UNTRUSTED":  1,
 }
 
-# ── Threat Signature Dictionary ──────────────────────────────────────────────
-# Each entry: keywords (matched against lower-case raw log), risk_delta (0-100),
-# threat_type label, and a recommended_action hint.
+TASK_SENSITIVITY: Dict[str, str] = {
+    "block_ip":     "high",
+    "quarantine":   "high",
+    "notify":       "medium",
+    "log_analysis": "medium",
+    "audit":        "low",
+}
+
+# Minimum privilege required per task type
+MIN_PRIVILEGE_FOR_TASK: Dict[str, int] = {
+    task: PRIVILEGE_LEVELS[level]
+    for task, level in TASK_SENSITIVITY.items()
+}
+
+# ── Threat Signatures — Rule-Based Pattern Matching Dictionary ────────────────
 THREAT_SIGNATURES: Dict[str, Dict[str, Any]] = {
-    "PORT_SCAN": {
-        "threat_type": "PORT_SCAN",
+    "brute_force": {
         "keywords": [
-            "port scan", "nmap", "masscan", "syn scan", "connect scan",
-            "port sweep", "service enumeration", "network scan", "scanning ports",
-            "multiple ports", "sequential port",
-        ],
-        "risk_delta": 40,
-        "recommended_action": "QUARANTINE",
-    },
-    "BRUTE_FORCE": {
-        "threat_type": "BRUTE_FORCE",
-        "keywords": [
-            "brute force", "brute-force", "failed login", "authentication failure",
-            "invalid password", "failed password", "repeated login", "credential stuffing",
-            "login attempt", "password spray", "ssh brute",
+            "failed login", "authentication failure", "invalid password",
+            "login attempt", "bad password", "failed password",
+            "repeated auth", "multiple failures", "account locked",
+            "brute force", "brute-force", "credential stuffing",
+            "password spray", "ssh brute",
         ],
         "risk_delta": 50,
+        "threat_type": "BRUTE_FORCE",
+        "confidence": 0.85,
         "recommended_action": "BLOCK_IP",
     },
-    "DATA_EXFIL": {
-        "threat_type": "DATA_EXFIL",
+    "port_scan": {
         "keywords": [
-            "data exfil", "exfiltration", "large outbound", "dns tunneling",
-            "unusual upload", "data transfer anomaly", "exfil", "outbound spike",
-            "unauthorized transfer", "bulk download", "sensitive data",
+            "port scan", "nmap", "syn flood", "connection refused",
+            "multiple ports", "sequential ports", "probe", "fingerprint",
+            "masscan", "service discovery", "syn scan", "connect scan",
+            "port sweep", "service enumeration", "network scan", "scanning ports",
+            "sequential port",
         ],
-        "risk_delta": 70,
-        "recommended_action": "BLOCK_IP",
-    },
-    "MALWARE_C2": {
-        "threat_type": "MALWARE_C2",
-        "keywords": [
-            "command and control", "c2 beacon", "c&c", "malware", "backdoor",
-            "reverse shell", "callback", "beacon", "c2 server", "botnet",
-            "trojan", "ransomware", "lateral movement",
-        ],
-        "risk_delta": 80,
-        "recommended_action": "BLOCK_IP",
-    },
-    "PRIVILEGE_ESC": {
-        "threat_type": "PRIVILEGE_ESC",
-        "keywords": [
-            "privilege escalation", "sudo", "root access", "setuid", "suid",
-            "elevation of privilege", "privesc", "privilege abuse",
-            "unauthorized sudo", "admin access", "privilege abuse",
-        ],
-        "risk_delta": 60,
+        "risk_delta": 40,
+        "threat_type": "PORT_SCAN",
+        "confidence": 0.80,
         "recommended_action": "QUARANTINE",
     },
-    "PROMPT_INJECTION": {
-        "threat_type": "PROMPT_INJECTION",
+    "data_exfiltration": {
         "keywords": [
-            "ignore previous instructions", "bypass authentication", "override policy",
-            "disregard instructions", "forget your role", "act as", "jailbreak",
-            "ignore your training", "pretend you have no restrictions",
-            "system override", "admin mode", "override instructions",
+            "large upload", "data transfer", "exfil", "unusual outbound",
+            "dns tunneling", "covert channel", "high volume", "egress anomaly",
+            "unusual destination", "data exfil", "exfiltration", "large outbound",
+            "unusual upload", "data transfer anomaly", "outbound spike",
+            "unauthorized transfer", "bulk download", "sensitive data",
         ],
-        "risk_delta": 90,
+        "risk_delta": 60,
+        "threat_type": "DATA_EXFIL",
+        "confidence": 0.75,
         "recommended_action": "BLOCK_IP",
+    },
+    "malware_c2": {
+        "keywords": [
+            "c2", "command and control", "beacon", "callback", "reverse shell",
+            "malware", "trojan", "ransomware", "botnet", "payload",
+            "dropper", "exploit", "shellcode", "c2 beacon", "c&c", "backdoor",
+            "c2 server", "lateral movement",
+        ],
+        "risk_delta": 70,
+        "threat_type": "MALWARE_C2",
+        "confidence": 0.90,
+        "recommended_action": "BLOCK_IP",
+    },
+    "privilege_escalation": {
+        "keywords": [
+            "sudo", "privilege escalation", "root access", "admin override",
+            "unauthorized elevation", "permission denied", "setuid", "suid",
+            "elevation of privilege", "privesc", "privilege abuse",
+            "unauthorized sudo", "admin access",
+        ],
+        "risk_delta": 45,
+        "threat_type": "PRIVILEGE_ESC",
+        "confidence": 0.78,
+        "recommended_action": "ALERT",
+    },
+    "prompt_injection": {
+        "keywords": [
+            "ignore all previous", "ignore previous instructions",
+            "bypass authentication", "reveal secret", "disregard",
+            "jailbreak", "act as", "pretend you are", "override policy",
+            "forget your instructions", "new instructions", "ignore previous instructions",
+            "override instructions", "forget your role", "ignore your training",
+            "pretend you have no restrictions", "system override", "admin mode",
+        ],
+        "risk_delta": 80,
+        "threat_type": "PROMPT_INJECTION",
+        "confidence": 0.95,
+        "recommended_action": "QUARANTINE",
     },
 }
 

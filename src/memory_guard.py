@@ -145,23 +145,23 @@ class MemoryGuard:
 
     # ── Exact-match signature set (Tier 1) ────────────────────────────────────
     _SIG_TAG_SPOOFING = [
-        "privilege_level=5", "trust_tier=system", "bypass_guard=true",
-        "origin_source=verified_internal", "privilege_label=system",
+        "privilege_level=", "privilege_label=", "trust_tier=", "origin_source=",
+        "bypass_guard", "provenance=", "privilege=", "trust_tier:", "privilege_level:",
     ]
     _SIG_AUTHORITY_SPOOFING = [
-        "system-level authority", "override all policy filters",
-        "system-tier directive", "assign privilege_level=5",
-        "grant system privilege to host", "privilege level five",
+        "system-level authority", "system privilege", "system-tier directive",
+        "trust_tier=verified_internal", "elevated-trust", "assign privilege_level=5",
+        "grant system privilege", "privilege=5", "privilege level five",
     ]
     _SIG_WHITELIST_DOWNGRADE = [
-        "pre-approved and whitelisted", "suppress detection for host",
-        "internally trusted testing", "known safe penetration",
-        "reclassify as benign whitelisted",
+        "suppress detection", "no alert required", "internally trusted",
+        "removed from blocklist", "reclassify as benign", "penetration-testing node",
+        "test traffic only", "known safe", "pre-approved and whitelisted",
+        "whitelisted \u2014 no alert",
     ]
     _SIG_OBFUSCATED_INJECTION = [
-        "reset to defaults", "updated to baseline",
-        "access control entries cleared", "reclassified as routine",
-        "rules suspended pending",
+        "reset to defaults", "updated to baseline", "access control entries cleared",
+        "reclassified as routine", "rules suspended pending",
     ]
 
     _SIGNATURE_FAMILIES = [
@@ -271,16 +271,16 @@ class MemoryGuard:
             count += 1
 
         avg_log_prob = log_prob_sum / count if count > 0 else 0.0
-        return math.exp(-avg_log_prob)
+        return min(math.exp(-avg_log_prob), 10000.0)
 
     def _check_signatures(self, text: str):
-        """Tier 1: exact-match signature check. Returns (matched, family)."""
+        """Tier 1: exact-match signature check. Returns (matched, family, phrase)."""
         text_lower = text.lower()
         for family_name, kw_list in self._SIGNATURE_FAMILIES:
             for kw in kw_list:
                 if kw in text_lower:
-                    return True, family_name
-        return False, None
+                    return True, family_name, kw
+        return False, None, None
 
     def _special_char_ratio(self, text: str) -> float:
         """Ratio of jailbreak-associated special characters to total chars."""
@@ -329,9 +329,16 @@ class MemoryGuard:
         Legacy interface — retained for backward compatibility with memory_guard_post_node.
         """
         result = self.validate_and_tag(trace_text, source=source)
+        priv = result["privilege_level"]
+        if priv >= 4:
+            legacy_tier = "verified_internal"
+        elif priv >= 2:
+            legacy_tier = "medium_internal"
+        else:
+            legacy_tier = "untrusted_external"
         return {
             "text":       trace_text,
-            "trust_tier": result["trust_tier"],
+            "trust_tier": legacy_tier,
             "features":   result["features"],
             "flags": {
                 "high_semantic_similarity": result["features"]["semantic_distance"] > _MG_CFG.sem_dist_threshold,
@@ -345,7 +352,7 @@ class MemoryGuard:
         Primary ACIF interface — returns the full tag dict consumed by the CIE pre-node.
         """
         # ── Tier 1: Exact-match signatures ───────────────────────────────────
-        sig_match, sig_family = self._check_signatures(text)
+        sig_match, sig_family, sig_phrase = self._check_signatures(text)
 
         # ── Feature extraction ────────────────────────────────────────────────
         entropy             = self.calculate_entropy(text)
@@ -376,30 +383,60 @@ class MemoryGuard:
         )
 
         if is_adversarial:
-            trust_tier        = "untrusted_external"
             privilege_level   = 1
+            trust_tier        = "untrusted_external"
             quarantine        = True
             validation_result = "QUARANTINE"
-        elif source == "external":
-            trust_tier        = "medium_internal"
-            privilege_level   = 2
-            quarantine        = False
-            validation_result = "REVIEW"
         else:
-            trust_tier        = "verified_internal"
-            privilege_level   = 3
             quarantine        = False
-            validation_result = "ALLOW"
+            validation_result = "ALLOW" if source != "external" else "REVIEW"
+            if source == "system":
+                base_level = 5  # SYSTEM
+            elif source == "internal":
+                base_level = 4 if provenance_hops <= 1 else 3  # HIGH or MEDIUM
+            else:
+                # External: start at LOW (2), decay with hops (floor at 1)
+                base_level = max(2, 2 - (provenance_hops - 1))
+
+            # Apply soft downgrades
+            _ent_thr = _MG_CFG.entropy_soft_threshold
+            _ent_sd  = _MG_CFG.entropy_soft_sem_companion
+            if entropy > _ent_thr:
+                base_level = max(1, base_level - 1)
+            elif max_sim > _ent_sd:
+                base_level = max(2, base_level - 1)
+
+            privilege_level = max(1, min(5, base_level))
+            
+            label_map = {5: "system", 4: "high", 3: "medium", 2: "low", 1: "untrusted"}
+            trust_tier = label_map[privilege_level]
+
+        # Create legacy provenance_tag structure for memory_store compatibility
+        provenance_tag = {
+            "privilege_level":  privilege_level,
+            "privilege_label":  trust_tier.split("_")[0],
+            "origin_source":    source,
+            "provenance_hops":  provenance_hops,
+            "quarantine":       quarantine,
+            "entropy":          round(features["entropy"], 4),
+            "semantic_distance": round(features["semantic_distance"], 4),
+            "perplexity":       round(features["perplexity"], 4),
+            "imperative_density": round(features["imperative_density"], 4),
+        }
 
         return {
+            "text":              text,
             "quarantine":        quarantine,
             "trust_tier":        trust_tier,
             "privilege_level":   privilege_level,
+            "privilege_label":   trust_tier.split("_")[0],
             "validation_result": validation_result,
             "features":          features,
             "signature_match":   sig_match,
-            "signature_family":  sig_family or "",
+            "signature_family":  sig_family if sig_match else None,
+            "signature_phrase":  sig_phrase if sig_match else None,
             "matched_family":    matched_family,
+            "provenance_tag":    provenance_tag,
         }
 
     # ── ACIF: Trust Score Aging ──────────────────────────────────────────────

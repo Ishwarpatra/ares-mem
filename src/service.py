@@ -53,9 +53,13 @@ _API_KEYS: Dict[str, Dict[str, Any]] = {
 }
 
 # ── ChromaDB escalations collection ───────────────────────────────────────────
-_CHROMA_PATH = os.path.join(_SRC_DIR, "chroma_data")
-_chroma_client = chromadb.PersistentClient(path=_CHROMA_PATH)
-_escalations   = _chroma_client.get_or_create_collection(name="ares_escalations")
+from orchestrator import _store as store
+
+class EscalationsProxy:
+    def __getattr__(self, name: str):
+        return getattr(store.escalations, name)
+
+_escalations = EscalationsProxy()
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -317,7 +321,7 @@ def dashboard():
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>ARES-Mem — ACIF v2 Dashboard</title>
+<title>ARES-Mem Security Operations Center (ACIF v2 Dashboard)</title>
 <meta name="description" content="Adaptive Coordination Intelligence Framework — real-time cyber defense dashboard"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
@@ -671,6 +675,77 @@ setInterval(loadMetrics, 30000);
 </body>
 </html>"""
     return html
+
+
+# ── Legacy API routes for test suite backwards compatibility ─────────────────
+
+class LegacyLogIngestRequest(BaseModel):
+    log_text: str
+
+@app.post("/api/logs/ingest")
+def legacy_ingest(body: LegacyLogIngestRequest, auth: Dict = Depends(verify_api_key)):
+    result = run_ares(body.log_text)
+    return result
+
+@app.get("/api/escalations")
+def api_escalations(auth: Dict = Depends(verify_api_key)):
+    total = _escalations.count()
+    if total == 0:
+        return []
+    result = _escalations.get(limit=min(total, 50))
+    tickets = []
+    for doc, meta in zip(result.get("documents") or [], result.get("metadatas") or []):
+        try:
+            ticket_data = json.loads(doc)
+        except Exception:
+            ticket_data = {"raw": doc}
+        tickets.append({**ticket_data, **(meta or {})})
+    return tickets
+
+@app.get("/api/quarantine")
+def api_quarantine(auth: Dict = Depends(verify_api_key)):
+    return api_escalations(auth)
+
+class LegacyResolveRequest(BaseModel):
+    status: str
+    resolution_notes: str
+
+@app.post("/api/escalations/{ticket_id}/resolve")
+def api_resolve_ticket(ticket_id: str, body: LegacyResolveRequest, auth: Dict = Depends(verify_api_key)):
+    try:
+        res = _escalations.get(ids=[ticket_id])
+        if not res or not res.get("documents"):
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        _escalations.update(
+            ids=[ticket_id],
+            metadatas=[{
+                "status": body.status,
+                "resolved_at": datetime.utcnow().isoformat(),
+                "analyst_note": body.resolution_notes,
+            }],
+        )
+        return {"status": "success", "ticket_id": ticket_id}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.get("/api/metrics")
+def get_api_metrics(auth: Dict = Depends(verify_api_key)):
+    esc_res = store.escalations.get()
+    tickets_count = len(esc_res.get("ids") or [])
+    resolved_count = 0
+    for m in (esc_res.get("metadatas") or []):
+        if m:
+            status = m.get("status")
+            if isinstance(status, str) and (status.startswith("RESOLVED") or status == "AUTO_RESOLVED" or status == "RESOLVED_APPROVED"):
+                resolved_count += 1
+    return {
+        "memory_count": store.collection.count(),
+        "quarantine_count": store.quarantine.count(),
+        "escalation_count": tickets_count,
+        "resolved_escalations": resolved_count,
+        "active_operator_role": auth["source"],
+        "system_status": "healthy"
+    }
 
 
 # ── Dev server entry ──────────────────────────────────────────────────────────

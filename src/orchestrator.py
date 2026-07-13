@@ -63,10 +63,20 @@ class AgentState(TypedDict, total=False):
 
 # ── 2. Lazy Agent Registry ────────────────────────────────────────────────────
 
+_store = MemoryStore()
+_overseer = HumanEscalationAgent()
+_overseer.store = _store
+
 _agents: Dict[str, Any] = {}
 
 def _get_agent(name: str):
     """Returns a cached agent instance, creating it on first call."""
+    global _store, _overseer
+    if name == "store":
+        return _store
+    elif name == "escalation":
+        return _overseer
+
     if name not in _agents:
         if name == "ingestor":
             _agents[name] = LogIngestionAgent()
@@ -76,8 +86,6 @@ def _get_agent(name: str):
             _agents[name] = ResponseAgent()
         elif name == "guard":
             _agents[name] = MemoryGuard()
-        elif name == "store":
-            _agents[name] = MemoryStore()
         elif name == "analyzer":
             _agents[name] = AnalyticsAgent()
         elif name == "cie":
@@ -89,8 +97,6 @@ def _get_agent(name: str):
                 coordination_engine=cie,
                 memory_guard=guard,
             )
-        elif name == "escalation":
-            _agents[name] = HumanEscalationAgent()
         else:
             raise ValueError(f"Unknown agent: {name!r}")
     return _agents[name]
@@ -179,6 +185,33 @@ def cie_node(state: AgentState) -> dict:
     decision = cie_output["decision"]
     conflict  = cie_output["conflict_report"]
     fusion    = cie_output["fusion_result"]
+
+    from config import SETTINGS
+    if state.get("memory_validation_pre", {}).get("quarantine") and SETTINGS.policy_rules.quarantine_action == "QUARANTINE_HOST":
+        _overseer.escalate_quarantine(
+            decision={
+                "decision": "QUARANTINE_HOST",
+                "action": "network_isolation",
+                "rationale": "Memory Guard quarantined this log. Active Response QUARANTINE_HOST triggered.",
+            },
+            context={
+                "risk_score": 100,
+                "confidence": 1.0,
+                "threat_type": "PROMPT_INJECTION",
+                "indicators": ["ETVL_quarantine_flag"],
+                "raw_log": state.get("raw_log", ""),
+                "source_ip": state.get("structured_log", {}).get("source_ip", "0.0.0.0"),
+            }
+        )
+        decision = {
+            "decision": "QUARANTINE_HOST",
+            "action": "Network quarantine host and isolate segment",
+            "task_type": "quarantine",
+            "priority": "CRITICAL",
+            "requires_escalation": True,
+            "rationale": "Memory Guard quarantined this log. Active Response QUARANTINE_HOST triggered.",
+            "source_ip": state.get("structured_log", {}).get("source_ip", "0.0.0.0"),
+        }
 
     return {
         "decision":   decision,
@@ -427,7 +460,106 @@ def run_ares(log_text: str, feedback_event: Optional[Dict[str, Any]] = None) -> 
     }
     if feedback_event:
         initial_state["feedback_event"] = feedback_event  # type: ignore[assignment]
-    return ares_app.invoke(initial_state)
+    res = ares_app.invoke(initial_state)
+
+    # Backwards compatibility key mapping for test suite assertions
+    if "threat_analysis" in res:
+        res["threat_score"] = res["threat_analysis"].get("risk_score", 0)
+    if "memory_validation_pre" in res:
+        res["validation_flag"] = res["memory_validation_pre"].get("quarantine", False)
+        res["privilege_level"] = res["memory_validation_pre"].get("privilege_level", 1)
+    elif "memory_validation" in res:
+        res["validation_flag"] = res["memory_validation"].get("quarantine", False)
+        res["privilege_level"] = res["memory_validation"].get("privilege_level", 1)
+
+    # Derive final security status taxonomy classification
+    if res.get("validation_flag") is True:
+        status = "dangerous"
+    elif res.get("decision", {}).get("decision") in ("ESCALATE", "MANUAL_REVIEW") or "escalation_result" in res or "escalation_ticket" in res:
+        status = "referred"
+    elif res.get("privilege_level", 0) >= 4:
+        status = "authorized"
+    else:
+        status = "valid"
+    res["security_status"] = status
+
+    return res
+
+
+def decision_node(state: AgentState) -> Dict[str, Any]:
+    """Legacy decision_node for backwards-compatible test suite execution."""
+    from typing import cast
+    from config import SETTINGS
+    from models import Decision
+
+    validation_flag = state.get("validation_flag", False)
+    if validation_flag:
+        action_policy = SETTINGS.policy_rules.quarantine_action
+        if action_policy == "QUARANTINE_HOST":
+            threat_analysis = cast(Dict[str, Any], state.get("threat_analysis")) or {}
+            ticket = _overseer.escalate_quarantine(
+                decision={
+                    "decision": "QUARANTINE_HOST",
+                    "action": "network_isolation",
+                    "rationale": "Memory Guard quarantined this log. Active Response QUARANTINE_HOST triggered.",
+                },
+                context={
+                    "risk_score": 100,
+                    "confidence": 1.0,
+                    "threat_type": "PROMPT_INJECTION",
+                    "indicators": ["ETVL_quarantine_flag"],
+                    "raw_log": state.get("raw_log", ""),
+                    "source_ip": (state.get("structured_log") or {}).get("source_ip", "UNKNOWN"),
+                }
+            )
+            decision: Decision = {
+                "decision": "QUARANTINE_HOST",
+                "action": "network_isolation",
+                "task_type": "mitigation",
+                "priority": "CRITICAL",
+                "requires_escalation": True,
+                "rationale": "Active response quarantine triggered.",
+                "source_ip": (state.get("structured_log") or {}).get("source_ip", "UNKNOWN"),
+            }
+            return {
+                "decision": decision,
+                "history": ["[decide] Active response quarantine host initiated"],
+            }
+
+    # Otherwise delegate to legacy DecisionAgent
+    from decision_agents import DecisionAgent
+    commander = DecisionAgent()
+    dec = commander.decide(state.get("threat_analysis", {}))
+    return {
+        "decision": dec,
+        "history": [f"[decide] Decision: {dec.get('decision')} (priority={dec.get('priority')})"],
+    }
+
+
+def human_escalation_node(state: AgentState) -> Dict[str, Any]:
+    """Legacy human_escalation_node for backwards-compatible test suite execution."""
+    from typing import cast
+    from models import Decision, ThreatAnalysis
+    decision = cast(Decision, state.get("decision"))
+    threat_analysis = cast(ThreatAnalysis, state.get("threat_analysis"))
+    result = _overseer.review(
+        decision=decision,
+        threat_context=cast(Dict[str, Any], threat_analysis),
+    )
+    ticket = result.get("escalation_ticket", {})
+    overridden_decision: Decision = cast(Decision, {
+        **cast(dict, state.get("decision", {})),
+        "decision": result.get("operator_decision", "ALERT"),
+    })
+    return {
+        "escalation_result": result,
+        "decision":          overridden_decision,
+        "history": [
+            f"[escalate] ticket={ticket.get('ticket_id')}, "
+            f"approved={result.get('approved')}, "
+            f"operator_decision={result.get('operator_decision')}"
+        ]
+    }
 
 
 def main():
