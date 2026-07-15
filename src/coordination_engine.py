@@ -19,7 +19,7 @@ import math
 import os
 import uuid
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("CoordinationEngine")
@@ -96,7 +96,7 @@ class AgentReliabilityEvaluator:
         self._history[agent_name].append({
             "outcome": outcome,
             "confidence": confidence,
-            "ts": datetime.utcnow().isoformat(),
+            "ts": datetime.now(timezone.utc).isoformat(),
         })
 
     def evaluate(self, agent_name: str) -> Dict[str, Any]:
