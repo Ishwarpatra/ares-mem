@@ -22,7 +22,7 @@ import logging
 import os
 import secrets
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import chromadb
@@ -201,7 +201,7 @@ def metrics(auth: Dict = Depends(verify_api_key)):
             "self_learning": feedback_stats,
             "service": {
                 "status": "healthy",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "version": "2.0.0-acif",
             },
         })
@@ -247,14 +247,14 @@ def resolve_ticket(body: ResolveRequest, auth: Dict = Depends(verify_api_key)):
             ids=[body.ticket_id],
             metadatas=[{
                 "status":      new_status,
-                "resolved_at": datetime.utcnow().isoformat(),
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
                 "analyst_note": body.analyst_note or "",
             }],
         )
         return JSONResponse({
             "ticket_id":  body.ticket_id,
             "new_status": new_status,
-            "resolved_at": datetime.utcnow().isoformat(),
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
         })
     except Exception as exc:
         logger.error(f"[/resolve] Update failed for {body.ticket_id}: {exc}")
@@ -720,7 +720,7 @@ def api_resolve_ticket(ticket_id: str, body: LegacyResolveRequest, auth: Dict = 
             ids=[ticket_id],
             metadatas=[{
                 "status": body.status,
-                "resolved_at": datetime.utcnow().isoformat(),
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
                 "analyst_note": body.resolution_notes,
             }],
         )

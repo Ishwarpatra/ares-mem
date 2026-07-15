@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("SelfLearningAgent")
@@ -168,7 +168,7 @@ class SelfLearningAgent:
             # ── Persist to feedback log ───────────────────────────────────────
             feedback_event = {
                 "event_id":       event_id,
-                "timestamp":      datetime.utcnow().isoformat(),
+                "timestamp":      datetime.now(timezone.utc).isoformat(),
                 "decision_made":  decision_made,
                 "analyst_verdict": analyst_verdict,
                 "threat_outcome": threat_outcome,
