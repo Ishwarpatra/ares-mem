@@ -68,6 +68,10 @@ class MemoryStore:
             name="ares_escalations",
             metadata={"description": "Durable registry for escalation review tickets"}
         )
+        self.audit_events = self.client.get_or_create_collection(
+            name="audit_events",
+            metadata={"description": "Immutable append-only audit trail"}
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Write Operations

@@ -57,8 +57,20 @@ class JSONFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno
         }
+        from src.tracing import tracer
+        request_id = tracer.get_id()
+        if request_id:
+            log_obj["request_id"] = request_id
+            
         if record.exc_info:
             log_obj["exception"] = self.formatException(record.exc_info)
+            
+        # Incorporate any extra kwargs passed to logger
+        for key, value in record.__dict__.items():
+            if key not in ["args", "asctime", "created", "exc_info", "exc_text", "filename", "funcName", "levelname", "levelno", "lineno", "message", "module", "msecs", "msg", "name", "pathname", "process", "processName", "relativeCreated", "stack_info", "thread", "threadName", "taskName"]:
+                if key not in log_obj:
+                    log_obj[key] = value
+                    
         return json.dumps(log_obj)
 
 def setup_logging(level: str = "INFO"):
@@ -90,11 +102,47 @@ app = FastAPI(
     version="2.0.0",
 )
 
+from fastapi import Request, Response
+from fastapi.responses import JSONResponse
+from src.tracing import tracer
+import uuid
+
+@app.middleware("http")
+async def add_request_tracing_middleware(request: Request, call_next):
+    """
+    Add request ID to every HTTP request for tracing.
+    If X-Request-ID header provided, use it. Otherwise generate new UUID.
+    """
+    # Extract or generate request ID
+    request_id = request.headers.get("X-Request-ID")
+    if not request_id:
+        request_id = str(uuid.uuid4())
+    
+    # Set in context for access in handlers
+    tracer.set_id(request_id)
+    
+    # Add to request state
+    request.state.request_id = request_id
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Add request ID to response headers
+    response.headers["X-Request-ID"] = request_id
+    
+    return response
+
 @app.on_event("startup")
 async def startup_event():
     from config.settings import load_settings
     settings = load_settings()
     setup_logging(settings.logging.level)
+    
+    # Initialize audit logger
+    from src.audit_logger import init_audit_logger
+    store = get_agent_registry().get_agent("store")
+    init_audit_logger(store)
+    
     logger.info(f"Starting {settings.app_name} v{settings.version}")
 
 @app.exception_handler(ValueError)
@@ -358,6 +406,27 @@ def resolve_ticket(
                 "analyst_note": body.analyst_note or "",
             }],
         )
+        from src.audit_logger import get_audit_logger, AuditEventType
+        logger_instance = get_audit_logger()
+        if logger_instance:
+            try:
+                request_id = getattr(getattr(auth, "request", None), "state", None)
+                req_id_str = request_id.request_id if request_id and hasattr(request_id, "request_id") else None
+                logger_instance.log_event(
+                    event_type=AuditEventType.ESCALATION_APPROVED if action == "approve" else AuditEventType.ESCALATION_DENIED,
+                    actor=auth.get("source", "system"),
+                    resource_id=body.ticket_id,
+                    action="escalation_resolved",
+                    details={
+                        "operator_decision": action,
+                        "analyst_note": body.analyst_note or "",
+                    },
+                    outcome="success",
+                    request_id=req_id_str,
+                )
+            except Exception as exc:
+                logger.error(f"Audit log failed in /resolve: {exc}")
+
         return SuccessResponse(data={
             "ticket_id":  body.ticket_id,
             "new_status": new_status,
@@ -392,6 +461,72 @@ def submit_feedback(
     except Exception as exc:
         logger.error(f"[/feedback] {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+@app.get("/audit/events", tags=["Compliance"])
+def get_audit_events(
+    auth: Dict = Depends(verify_api_key),
+    event_type: Optional[str] = None,
+    actor: Optional[str] = None,
+    resource_id: Optional[str] = None,
+    limit: int = 100,
+):
+    """
+    Query immutable audit trail.
+    Requires: internal or system tier API key.
+    """
+    if auth["source"] not in ("system", "internal"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions for audit access")
+    
+    if limit > 1000:
+        limit = 1000
+    
+    store = _get_agent("store")
+    
+    try:
+        # Build where filter
+        where_filter = {}
+        if event_type:
+            where_filter["event_type"] = {"$eq": event_type}
+        if actor:
+            where_filter["actor"] = {"$eq": actor}
+        if resource_id:
+            where_filter["resource_id"] = {"$eq": resource_id}
+        
+        # Query
+        where_clause = where_filter if where_filter else None
+        results = store.audit_events.get(
+            where=where_clause,
+            limit=limit,
+        )
+        
+        # Parse events
+        events = []
+        for doc, meta in zip(
+            results.get("documents", []),
+            results.get("metadatas", [])
+        ):
+            try:
+                event = json.loads(doc)
+                # Merge metadata
+                event_obj = {**event, **meta}
+                events.append(event_obj)
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse audit event document")
+        
+        return JSONResponse({
+            "events": events,
+            "total": len(events),
+            "query": {
+                "event_type": event_type,
+                "actor": actor,
+                "resource_id": resource_id,
+                "limit": limit,
+            },
+        })
+    
+    except Exception as e:
+        logger.error(f"Audit query failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to query audit trail")
 
 
 @app.get("/explain/{event_id}", response_model=SuccessResponse[Dict], tags=["Explainability"])
