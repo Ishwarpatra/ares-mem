@@ -27,6 +27,7 @@ logger = logging.getLogger("CoordinationEngine")
 # ── Optional LiteLLM import (for Explainable Reasoning) ──────────────────────
 try:
     import litellm
+    from src.circuit_breaker import llm_circuit_breaker
     litellm.set_verbose = False
     _LITELLM_AVAILABLE = True
 except ImportError:
@@ -592,15 +593,23 @@ class ExplainableReasoner:
             "suitable for a security analyst. Focus on the decision rationale and any conflicts.\n\n"
             f"{template}\n\nSummary:"
         )
-        resp = litellm.completion(
-            model=f"ollama/{self._OLLAMA_MODEL}",
-            messages=[{"role": "user", "content": prompt}],
-            api_base=self._OLLAMA_BASE,
-            timeout=self._TIMEOUT_SECS,
-            temperature=0.0,
-        )
-        summary = resp.choices[0].message.content.strip()
-        return f"{template}\n\n--- LLM Summary ---\n{summary}"
+
+        def _call_llm():
+            resp = litellm.completion(
+                model=f"ollama/{self._OLLAMA_MODEL}",
+                messages=[{"role": "user", "content": prompt}],
+                api_base=self._OLLAMA_BASE,
+                timeout=self._TIMEOUT_SECS,
+                temperature=0.0,
+            )
+            summary = resp.choices[0].message.content.strip()
+            return f"{template}\n\n--- LLM Summary ---\n{summary}"
+
+        def _fallback():
+            logger.warning("[ExplainableReasoner] LLM circuit OPEN. Using template fallback.")
+            return template
+
+        return llm_circuit_breaker.call(_call_llm, _fallback)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗

@@ -20,6 +20,7 @@ logger = logging.getLogger("LlmDecisionADK")
 # ── Try to import litellm ─────────────────────────────────────────────────────
 try:
     import litellm
+    from src.circuit_breaker import llm_circuit_breaker
     litellm.set_verbose = False          # suppress litellm debug logs
     _LITELLM_AVAILABLE = True
 except ImportError:
@@ -105,7 +106,7 @@ def run_llm_decision(
         "source_ip":          sl.get("source_ip", "0.0.0.0"),
     }
 
-    try:
+    def _call_llm():
         response = litellm.completion(
             model=f"ollama/{model_name}",
             api_base=api_base,
@@ -131,6 +132,12 @@ def run_llm_decision(
                     validated.decision, prompt_data["risk_score"], model_name)
         return validated.model_dump()
 
+    def _fallback():
+        logger.warning("[LLM] LLM circuit OPEN or failed. Using None fallback.")
+        return None
+
+    try:
+        return llm_circuit_breaker.call(_call_llm, _fallback)
     except Exception as e:
-        logger.warning("[LLM] LLM decision failed: %s", str(e))
+        logger.warning("[LLM] Fallback failed: %s", str(e))
         return None

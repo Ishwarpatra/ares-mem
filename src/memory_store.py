@@ -15,7 +15,11 @@ Sandboxed Retrieval:
 """
 import os
 import time
+import logging
+import uuid
+import json
 import chromadb
+from src.circuit_breaker import chroma_circuit_breaker
 from typing import Dict, Any, List, Optional, Tuple, cast
 
 from models import PRIVILEGE_LEVELS, MIN_PRIVILEGE_FOR_TASK
@@ -203,10 +207,18 @@ class MemoryStore:
             return [], []
 
         actual_n = min(fetch_n, collection_count)
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=actual_n,
-        )
+        
+        def _do_query():
+            return self.collection.query(
+                query_texts=[query],
+                n_results=actual_n,
+            )
+            
+        def _fallback():
+            logger.warning("[MemoryStore] ChromaDB circuit OPEN. Returning empty results.")
+            return {"documents": [], "metadatas": []}
+
+        results = chroma_circuit_breaker.call(_do_query, _fallback)
 
         allowed: List[str] = []
         quarantined: List[str] = []
