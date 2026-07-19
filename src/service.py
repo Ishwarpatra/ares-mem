@@ -114,20 +114,21 @@ limiter = Limiter(key_func=get_api_key_or_ip)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-def get_rate_limit(request: Request) -> str:
-    api_key = request.headers.get("X-API-KEY")
-    if api_key:
-        tier = _API_KEYS.get(api_key, {}).get("source", "external")
-        if tier == "system":
-            return "10000/hour"
-        elif tier == "internal":
-            return "1000/hour"
+def get_rate_limit() -> str:
+    tier = API_TIER_CTX.get()
+    if tier == "system":
+        return "10000/hour"
+    elif tier == "internal":
+        return "1000/hour"
     return "100/hour"
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from src.tracing import tracer
 import uuid
+from contextvars import ContextVar
+
+API_TIER_CTX: ContextVar[str] = ContextVar("api_tier", default="external")
 
 @app.middleware("http")
 async def add_request_tracing_middleware(request: Request, call_next):
@@ -146,6 +147,13 @@ async def add_request_tracing_middleware(request: Request, call_next):
     # Add to request state
     request.state.request_id = request_id
     
+    api_key = request.headers.get("X-API-KEY")
+    if api_key:
+        tier = _API_KEYS.get(api_key, {}).get("source", "external")
+        API_TIER_CTX.set(tier)
+    else:
+        API_TIER_CTX.set("external")
+        
     # Process request
     response = await call_next(request)
     
