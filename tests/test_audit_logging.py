@@ -3,13 +3,19 @@ from fastapi.testclient import TestClient
 import uuid
 import json
 
-from src.service import app
-from src.audit_logger import get_audit_logger, AuditEventType
-from src.orchestrator import _get_agent
+from src.service import app, startup_event
+from src.audit_logger import get_audit_logger, init_audit_logger, AuditEventType
+from src.orchestrator import _get_agent, get_agent_registry
 
 client = TestClient(app)
 SYSTEM_KEY = "system-key-123"
 EXTERNAL_KEY = "external-key-789"
+
+@pytest.fixture(autouse=True)
+def setup_audit():
+    # Force initialization for tests if TestClient didn't do it
+    store = _get_agent("store")
+    init_audit_logger(store)
 
 def test_decision_event_logged():
     headers = {"X-API-KEY": SYSTEM_KEY}
