@@ -23,26 +23,57 @@ import os
 import secrets
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
+from uuid import uuid4
 
 import chromadb
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from enum import Enum
 
 # Ensure src/ is importable when running from project root
 _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from orchestrator import run_ares, _get_agent
+from orchestrator import run_ares, _get_agent, get_agent_registry, AgentRegistry
 from self_learning_agent import (
     SelfLearningAgent,
     VERDICT_CONFIRMED, VERDICT_FALSE_POS, VERDICT_MISSED, VERDICT_BENIGN,
 )
+from models import ErrorResponse, SuccessResponse
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+class JSONFormatter(logging.Formatter):
+    """Outputs structured JSON logs"""
+    def format(self, record: logging.LogRecord) -> str:
+        log_obj = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno
+        }
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_obj)
+
+def setup_logging(level: str = "INFO"):
+    handler = logging.StreamHandler()
+    handler.setFormatter(JSONFormatter())
+    
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level.upper())
+    # clear existing handlers to avoid duplicates
+    root_logger.handlers = []
+    root_logger.addHandler(handler)
+    
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("chromadb").setLevel(logging.WARNING)
+
 logger = logging.getLogger("AresMemService")
 
 # ── API Key → provenance tier mapping ─────────────────────────────────────────
@@ -52,22 +83,55 @@ _API_KEYS: Dict[str, Dict[str, Any]] = {
     "external-key-789": {"source": "external", "provenance_hops": 2},
 }
 
-# ── ChromaDB escalations collection ───────────────────────────────────────────
-from orchestrator import _store as store
-
-class EscalationsProxy:
-    def __getattr__(self, name: str):
-        return getattr(store.escalations, name)
-
-_escalations = EscalationsProxy()
-
-
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI(
     title="ARES-Mem API (ACIF v2)",
     description="Adaptive Coordination Intelligence Framework for Autonomous Cyber Defense",
     version="2.0.0",
 )
+
+@app.on_event("startup")
+async def startup_event():
+    from config.settings import load_settings
+    settings = load_settings()
+    setup_logging(settings.logging.level)
+    logger.info(f"Starting {settings.app_name} v{settings.version}")
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    logger.warning(f"Validation error: {exc}")
+    return JSONResponse(
+        status_code=400,
+        content=ErrorResponse(
+            code="INVALID_VALUE",
+            message=str(exc),
+            request_id=request.headers.get("X-Request-ID")
+        ).dict()
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content=ErrorResponse(
+            code="INTERNAL_ERROR",
+            message="An unexpected error occurred",
+            request_id=request.headers.get("X-Request-ID")
+        ).dict()
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    code = "AUTH_REQUIRED" if exc.status_code in (401, 403) else "HTTP_ERROR"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ErrorResponse(
+            code=code,
+            message=exc.detail,
+            request_id=request.headers.get("X-Request-ID")
+        ).dict()
+    )
 
 
 # ── Auth dependency ───────────────────────────────────────────────────────────
@@ -78,12 +142,13 @@ def verify_api_key(request: Request) -> Dict[str, Any]:
     for key, meta in _API_KEYS.items():
         if secrets.compare_digest(provided, key):
             return meta
-    raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    raise HTTPException(status_code=403, detail="Invalid or missing API key")
 
 
 # ── Pydantic request/response models ─────────────────────────────────────────
 
 class IngestRequest(BaseModel):
+    id: Optional[str] = None
     log: str
 
 class ResolveRequest(BaseModel):
@@ -110,17 +175,33 @@ class IngestResponse(BaseModel):
     history: list
 
 
+class HealthStatus(str, Enum):
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    UNHEALTHY = "unhealthy"
+
+class HealthCheck(BaseModel):
+    status: HealthStatus
+    timestamp: str
+    version: str
+    checks: Dict[str, str]
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@app.post("/ingest", response_model=IngestResponse, tags=["Pipeline"])
-def ingest(body: IngestRequest, auth: Dict = Depends(verify_api_key)):
+@app.post("/ingest", response_model=SuccessResponse[IngestResponse], tags=["Pipeline"])
+def ingest(
+    body: IngestRequest, 
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
     """
     Ingest a raw security log through the full ACIF pipeline.
-    Returns the CIE decision, threat belief, conflict flag, and event ID.
+    Safely ingests escalation data with automatic upsert.
     """
     logger.info(f"[/ingest] source={auth['source']} log_len={len(body.log)}")
     try:
-        result = run_ares(body.log)
+        # Pass registry to run_ares so orchestrator can use it
+        result = run_ares(body.log, registry=registry)
         cie    = result.get("cie_output", {})
         dec    = result.get("decision", {})
         fusion = cie.get("fusion_result", {})
@@ -131,22 +212,23 @@ def ingest(body: IngestRequest, auth: Dict = Depends(verify_api_key)):
         # Store escalation ticket if generated
         ticket = result.get("escalation_ticket")
         if ticket:
-            try:
-                _escalations.add(
-                    documents=[json.dumps(ticket)],
+            escalation_id = body.id or ticket.get("ticket_id") or f"escalation_{uuid4()}"
+            store_agent = registry.get("store")
+            if store_agent and hasattr(store_agent, "escalations"):
+                store_agent.escalations.upsert(
+                    ids=[escalation_id],
                     metadatas=[{
                         "ticket_id":  ticket.get("ticket_id", ""),
                         "status":     ticket.get("status", ""),
                         "source_ip":  ticket.get("source_ip", ""),
                         "risk_score": ticket.get("risk_score", 0),
                         "created_at": ticket.get("created_at", ""),
+                        "timestamp":  datetime.utcnow().isoformat(),
                     }],
-                    ids=[ticket["ticket_id"]],
+                    documents=[json.dumps(ticket)],
                 )
-            except Exception as exc:
-                logger.debug(f"[/ingest] ticket store (dup or error): {exc}")
 
-        return IngestResponse(
+        data = IngestResponse(
             status="processed",
             decision=dec.get("decision", "UNKNOWN"),
             risk_score=result.get("threat_analysis", {}).get("risk_score", 0),
@@ -157,28 +239,42 @@ def ingest(body: IngestRequest, auth: Dict = Depends(verify_api_key)):
             execution_status=exec_r.get("status", ""),
             history=result.get("history", []),
         )
+        return SuccessResponse(data=data)
     except Exception as exc:
         logger.error(f"[/ingest] Pipeline error: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/metrics", tags=["Monitoring"])
-def metrics(auth: Dict = Depends(verify_api_key)):
+@app.get("/metrics", response_model=SuccessResponse[Dict], tags=["Monitoring"])
+def metrics(
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
     """
     System health and CIE metrics: trust weights, agent reliability,
     pipeline statistics, and pending delay queue.
     """
     try:
-        cie_agent  = _get_agent("cie")
-        resp_agent = _get_agent("muscle")
-        store      = _get_agent("store")
-        learner    = _get_agent("self_learner")
+        cie_agent  = registry.get("cie")
+        resp_agent = registry.get("muscle")
+        store      = registry.get("store")
+        learner    = registry.get("self_learner")
 
-        cie_metrics   = cie_agent.get_metrics()
-        history       = resp_agent.get_history()
-        pending_delays = resp_agent.get_pending_delays()
-        memories      = store.get_all_memories(limit=100)
-        feedback_stats = learner.get_summary_stats()
+        if not all([cie_agent, resp_agent, store, learner]):
+            # If not initialized yet, initialize them by fetching through _get_agent once
+            _get_agent("cie")
+            _get_agent("muscle")
+            _get_agent("self_learner")
+            cie_agent  = registry.get("cie")
+            resp_agent = registry.get("muscle")
+            store      = registry.get("store")
+            learner    = registry.get("self_learner")
+
+        cie_metrics   = cie_agent.get_metrics() if cie_agent else {}
+        history       = resp_agent.get_history() if resp_agent else []
+        pending_delays = resp_agent.get_pending_delays() if resp_agent else []
+        memories      = store.get_all_memories(limit=100) if store else []
+        feedback_stats = learner.get_summary_stats() if learner else {}
 
         # Decision distribution from action history
         decision_counts: Dict[str, int] = {}
@@ -186,7 +282,7 @@ def metrics(auth: Dict = Depends(verify_api_key)):
             d = h.get("decision", "UNKNOWN")
             decision_counts[d] = decision_counts.get(d, 0) + 1
 
-        return JSONResponse({
+        data = {
             "cie": {
                 "trust_weights":  cie_metrics.get("trust_weights"),
                 "beta_params":    cie_metrics.get("beta_params"),
@@ -204,20 +300,26 @@ def metrics(auth: Dict = Depends(verify_api_key)):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "version": "2.0.0-acif",
             },
-        })
+        }
+        return SuccessResponse(data=data)
     except Exception as exc:
         logger.error(f"[/metrics] {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/quarantine", tags=["Escalations"])
-def list_quarantine(auth: Dict = Depends(verify_api_key)):
+@app.get("/quarantine", response_model=SuccessResponse[List[Dict]], tags=["Escalations"])
+def list_quarantine(
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
     """List all escalation tickets currently in PENDING_REVIEW status."""
     try:
-        total = _escalations.count()
+        store_agent = registry.get("store") or _get_agent("store")
+        escalations = store_agent.escalations
+        total = escalations.count()
         if total == 0:
-            return JSONResponse({"tickets": [], "total": 0})
-        result = _escalations.get(limit=min(total, 50))
+            return SuccessResponse(data=[], meta={"total": 0})
+        result = escalations.get(limit=min(total, 50))
         tickets = []
         for doc, meta in zip(result.get("documents") or [], result.get("metadatas") or []):
             if meta and meta.get("status") in ("quarantined_pending_review", "OPEN"):
@@ -226,16 +328,20 @@ def list_quarantine(auth: Dict = Depends(verify_api_key)):
                 except Exception:
                     ticket_data = {"raw": doc}
                 tickets.append({**ticket_data, **(meta or {})})
-        return JSONResponse({"tickets": tickets, "total": len(tickets)})
+        return SuccessResponse(data=tickets, meta={"total": len(tickets)})
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/resolve", tags=["Escalations"])
-def resolve_ticket(body: ResolveRequest, auth: Dict = Depends(verify_api_key)):
+@app.post("/resolve", response_model=SuccessResponse[Dict], tags=["Escalations"])
+def resolve_ticket(
+    body: ResolveRequest, 
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
     """
     Approve or reverse an escalation ticket.
-    Uses ChromaDB .update() to avoid duplicate-key bugs (never uses .add()).
+    Uses ChromaDB .update() to avoid duplicate-key bugs.
     """
     action = body.action.lower()
     if action not in ("approve", "reverse"):
@@ -243,7 +349,8 @@ def resolve_ticket(body: ResolveRequest, auth: Dict = Depends(verify_api_key)):
 
     new_status = "RESOLVED_APPROVED" if action == "approve" else "RESOLVED_REVERSED"
     try:
-        _escalations.update(
+        store_agent = registry.get("store") or _get_agent("store")
+        store_agent.escalations.update(
             ids=[body.ticket_id],
             metadatas=[{
                 "status":      new_status,
@@ -251,7 +358,7 @@ def resolve_ticket(body: ResolveRequest, auth: Dict = Depends(verify_api_key)):
                 "analyst_note": body.analyst_note or "",
             }],
         )
-        return JSONResponse({
+        return SuccessResponse(data={
             "ticket_id":  body.ticket_id,
             "new_status": new_status,
             "resolved_at": datetime.now(timezone.utc).isoformat(),
@@ -261,15 +368,17 @@ def resolve_ticket(body: ResolveRequest, auth: Dict = Depends(verify_api_key)):
         raise HTTPException(status_code=404, detail=f"Ticket {body.ticket_id} not found or update failed")
 
 
-@app.post("/feedback", tags=["Self-Learning"])
-def submit_feedback(body: FeedbackRequest, auth: Dict = Depends(verify_api_key)):
+@app.post("/feedback", response_model=SuccessResponse[Dict], tags=["Self-Learning"])
+def submit_feedback(
+    body: FeedbackRequest, 
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
     """
     Submit analyst feedback to the SelfLearningAgent.
-    Updates CIE Beta trust priors and optionally repairs a MemoryGuard trace.
-    Valid analyst_verdict values: CONFIRMED_THREAT | FALSE_POSITIVE | MISSED_THREAT | CONFIRMED_BENIGN
     """
     try:
-        learner = _get_agent("self_learner")
+        learner = registry.get("self_learner") or _get_agent("self_learner")
         result  = learner.record_feedback(
             event_id=body.event_id,
             decision_made=body.decision_made,
@@ -277,7 +386,7 @@ def submit_feedback(body: FeedbackRequest, auth: Dict = Depends(verify_api_key))
             trace_id=body.trace_id,
             analyst_note=body.analyst_note,
         )
-        return JSONResponse(result)
+        return SuccessResponse(data=result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -285,20 +394,24 @@ def submit_feedback(body: FeedbackRequest, auth: Dict = Depends(verify_api_key))
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/explain/{event_id}", tags=["Explainability"])
-def explain_event(event_id: str, auth: Dict = Depends(verify_api_key)):
+@app.get("/explain/{event_id}", response_model=SuccessResponse[Dict], tags=["Explainability"])
+def explain_event(
+    event_id: str, 
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
     """
     Retrieve the CIE explanation narrative for a given event_id.
-    Looks up the escalation ticket in the ares_escalations collection.
     """
     try:
-        result = _escalations.get(ids=[event_id])
+        store_agent = registry.get("store") or _get_agent("store")
+        result = store_agent.escalations.get(ids=[event_id])
         docs   = result.get("documents") or []
         metas  = result.get("metadatas") or []
         if not docs:
             raise HTTPException(status_code=404, detail=f"Event {event_id} not found in escalation store")
         ticket_data = json.loads(docs[0]) if docs[0] else {}
-        return JSONResponse({
+        return SuccessResponse(data={
             "event_id":    event_id,
             "explanation": ticket_data.get("explanation", "No explanation available"),
             "decision":    ticket_data.get("decision", "UNKNOWN"),
@@ -309,6 +422,64 @@ def explain_event(event_id: str, auth: Dict = Depends(verify_api_key)):
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+@app.get("/health", response_model=HealthCheck)
+async def health_check(registry: AgentRegistry = Depends(get_agent_registry)) -> HealthCheck:
+    """Kubernetes-compatible health check"""
+    checks = {}
+    from config.settings import load_settings
+    settings = load_settings()
+    try:
+        memory_store = registry.get("store") or _get_agent("store")
+        checks["memory_store"] = "ok" if memory_store else "unavailable"
+        
+        coord_engine = registry.get("cie") or _get_agent("cie")
+        checks["coordination_engine"] = "ok" if coord_engine else "unavailable"
+        
+        try:
+            if memory_store and hasattr(memory_store, "escalations"):
+                memory_store.escalations.get(limit=1)  # Test query
+                checks["escalations_db"] = "ok"
+            else:
+                checks["escalations_db"] = "unavailable"
+        except Exception as e:
+            logger.warning(f"DB health check failed: {e}")
+            checks["escalations_db"] = "error"
+        
+        failed = [k for k, v in checks.items() if v != "ok"]
+        if not failed:
+            overall_status = HealthStatus.HEALTHY
+        elif len(failed) < len(checks):
+            overall_status = HealthStatus.DEGRADED
+        else:
+            overall_status = HealthStatus.UNHEALTHY
+        
+        return HealthCheck(
+            status=overall_status,
+            timestamp=datetime.utcnow().isoformat(),
+            version=settings.version,
+            checks=checks
+        )
+    except Exception as e:
+        logger.error(f"Health check failed: {e}", exc_info=True)
+        return HealthCheck(
+            status=HealthStatus.UNHEALTHY,
+            timestamp=datetime.utcnow().isoformat(),
+            version=settings.version,
+            checks={"error": str(e)}
+        )
+
+@app.get("/live")
+async def liveness() -> Dict:
+    return {"status": "alive"}
+
+@app.get("/ready")
+async def readiness(registry: AgentRegistry = Depends(get_agent_registry)) -> Dict:
+    health = await health_check(registry)
+    if health.status == HealthStatus.HEALTHY:
+        return {"status": "ready"}
+    else:
+        raise HTTPException(status_code=503, detail="Service not ready")
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -683,16 +854,24 @@ class LegacyLogIngestRequest(BaseModel):
     log_text: str
 
 @app.post("/api/logs/ingest")
-def legacy_ingest(body: LegacyLogIngestRequest, auth: Dict = Depends(verify_api_key)):
-    result = run_ares(body.log_text)
+def legacy_ingest(
+    body: LegacyLogIngestRequest, 
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
+    result = run_ares(body.log_text, registry=registry)
     return result
 
 @app.get("/api/escalations")
-def api_escalations(auth: Dict = Depends(verify_api_key)):
-    total = _escalations.count()
+def api_escalations(
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
+    store_agent = registry.get("store") or _get_agent("store")
+    total = store_agent.escalations.count()
     if total == 0:
         return []
-    result = _escalations.get(limit=min(total, 50))
+    result = store_agent.escalations.get(limit=min(total, 50))
     tickets = []
     for doc, meta in zip(result.get("documents") or [], result.get("metadatas") or []):
         try:
@@ -703,20 +882,29 @@ def api_escalations(auth: Dict = Depends(verify_api_key)):
     return tickets
 
 @app.get("/api/quarantine")
-def api_quarantine(auth: Dict = Depends(verify_api_key)):
-    return api_escalations(auth)
+def api_quarantine(
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
+    return api_escalations(auth, registry)
 
 class LegacyResolveRequest(BaseModel):
     status: str
     resolution_notes: str
 
 @app.post("/api/escalations/{ticket_id}/resolve")
-def api_resolve_ticket(ticket_id: str, body: LegacyResolveRequest, auth: Dict = Depends(verify_api_key)):
+def api_resolve_ticket(
+    ticket_id: str, 
+    body: LegacyResolveRequest, 
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
     try:
-        res = _escalations.get(ids=[ticket_id])
+        store_agent = registry.get("store") or _get_agent("store")
+        res = store_agent.escalations.get(ids=[ticket_id])
         if not res or not res.get("documents"):
             raise HTTPException(status_code=404, detail="Ticket not found")
-        _escalations.update(
+        store_agent.escalations.update(
             ids=[ticket_id],
             metadatas=[{
                 "status": body.status,
@@ -729,8 +917,12 @@ def api_resolve_ticket(ticket_id: str, body: LegacyResolveRequest, auth: Dict = 
         raise HTTPException(status_code=500, detail=str(exc))
 
 @app.get("/api/metrics")
-def get_api_metrics(auth: Dict = Depends(verify_api_key)):
-    esc_res = store.escalations.get()
+def get_api_metrics(
+    auth: Dict = Depends(verify_api_key),
+    registry: AgentRegistry = Depends(get_agent_registry)
+):
+    store_agent = registry.get("store") or _get_agent("store")
+    esc_res = store_agent.escalations.get()
     tickets_count = len(esc_res.get("ids") or [])
     resolved_count = 0
     for m in (esc_res.get("metadatas") or []):
@@ -739,8 +931,8 @@ def get_api_metrics(auth: Dict = Depends(verify_api_key)):
             if isinstance(status, str) and (status.startswith("RESOLVED") or status == "AUTO_RESOLVED" or status == "RESOLVED_APPROVED"):
                 resolved_count += 1
     return {
-        "memory_count": store.collection.count(),
-        "quarantine_count": store.quarantine.count(),
+        "memory_count": store_agent.collection.count(),
+        "quarantine_count": store_agent.quarantine.count(),
         "escalation_count": tickets_count,
         "resolved_escalations": resolved_count,
         "active_operator_role": auth["source"],
