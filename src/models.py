@@ -4,7 +4,24 @@ models.py — Shared TypedDicts, constants, and schema definitions for ARES-Mem.
 All agents import from here to ensure type consistency across the pipeline.
 Extended for ACIF: AgentReliability, ConflictReport, EvidenceFusionResult, CIEOutput.
 """
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict, Generic, TypeVar
+from pydantic import BaseModel, Field
+from datetime import datetime
+
+T = TypeVar('T')
+
+class ErrorResponse(BaseModel):
+    status: str = "error"
+    code: str
+    message: str
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    request_id: Optional[str] = None
+
+class SuccessResponse(BaseModel, Generic[T]):
+    status: str = "success"
+    data: T
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    meta: Optional[Dict] = None
 
 
 # ── Privilege tier constants (5-tier) ───────────────────────────────────────

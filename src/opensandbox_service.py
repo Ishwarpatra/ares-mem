@@ -156,7 +156,8 @@ class OpenSandboxService:
                 self.sandbox.close()
                 self.sandbox = None
             except Exception as e:
-                print(f"Warning: Error during sandbox cleanup: {str(e)}")
+                import logging
+                logging.getLogger("AresMemSandbox").warning(f"Error during sandbox cleanup: {str(e)}")
 
     def __enter__(self):
         return self

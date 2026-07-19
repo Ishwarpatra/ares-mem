@@ -39,6 +39,10 @@ from self_learning_agent import SelfLearningAgent
 from human_escalation_agent import HumanEscalationAgent
 
 logger = logging.getLogger("Orchestrator")
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(handler)
 
 
 # ── 1. Shared State Schema ────────────────────────────────────────────────────
@@ -61,51 +65,86 @@ class AgentState(TypedDict, total=False):
     feedback_event:        Dict[str, Any]  # analyst feedback payload
 
 
-# ── 2. Lazy Agent Registry ────────────────────────────────────────────────────
+# ── 2. Thread-Safe Agent Registry ───────────────────────────────────────────────
 
-_store = MemoryStore()
-_overseer = HumanEscalationAgent()
-_overseer.store = _store
+import threading
+from functools import lru_cache
 
-_agents: Dict[str, Any] = {}
+class AgentRegistry:
+    """Thread-safe agent container with locks"""
+    
+    def __init__(self):
+        self._agents: Dict[str, Any] = {}
+        self._lock = threading.RLock()
+    
+    def register(self, agent_type: str, agent: Any):
+        """Register agent (thread-safe)"""
+        with self._lock:
+            self._agents[agent_type] = agent
+    
+    def get(self, agent_type: str) -> Optional[Any]:
+        """Retrieve agent (thread-safe)"""
+        with self._lock:
+            return self._agents.get(agent_type)
+    
+    def get_all(self) -> Dict[str, Any]:
+        """Get all agents (thread-safe)"""
+        with self._lock:
+            return dict(self._agents)
+
+@lru_cache(maxsize=1)
+def get_agent_registry() -> AgentRegistry:
+    """Dependency injection function for FastAPI Depends()"""
+    return AgentRegistry()
 
 def _get_agent(name: str):
-    """Returns a cached agent instance, creating it on first call."""
-    global _store, _overseer
-    if name == "store":
-        return _store
-    elif name == "escalation":
-        return _overseer
-
-    if name not in _agents:
-        if name == "ingestor":
-            _agents[name] = LogIngestionAgent()
+    """Returns a cached agent instance, creating it safely on first call."""
+    registry = get_agent_registry()
+    
+    # Fast path
+    agent = registry.get(name)
+    if agent is not None:
+        return agent
+        
+    # Initialization path (with lock to prevent concurrent initialization)
+    with registry._lock:
+        # Double-check inside lock
+        agent = registry.get(name)
+        if agent is not None:
+            return agent
+            
+        if name == "store":
+            agent = MemoryStore()
+        elif name == "escalation":
+            agent = HumanEscalationAgent()
+            agent.store = _get_agent("store")
+        elif name == "ingestor":
+            agent = LogIngestionAgent()
         elif name == "threat_analyst":
-            _agents[name] = ThreatAnalysisAgent()
+            agent = ThreatAnalysisAgent()
         elif name == "muscle":
-            _agents[name] = ResponseAgent()
+            agent = ResponseAgent()
         elif name == "guard":
-            _agents[name] = MemoryGuard()
+            agent = MemoryGuard()
         elif name == "analyzer":
-            _agents[name] = AnalyticsAgent()
+            agent = AnalyticsAgent()
         elif name == "cie":
-            _agents[name] = CoordinationEngine()
+            agent = CoordinationEngine()
         elif name == "self_learner":
-            cie   = _get_agent("cie")
+            cie = _get_agent("cie")
             guard = _get_agent("guard")
-            _agents[name] = SelfLearningAgent(
-                coordination_engine=cie,
-                memory_guard=guard,
-            )
+            agent = SelfLearningAgent(coordination_engine=cie, memory_guard=guard)
         else:
             raise ValueError(f"Unknown agent: {name!r}")
-    return _agents[name]
+            
+        registry.register(name, agent)
+        return agent
 
 
 # ── 3. Node Functions ─────────────────────────────────────────────────────────
 
 def ingestion_node(state: AgentState) -> dict:
-    print("[Node] Ingesting Log...")
+    logger.debug("[Node] Ingesting Log...")
     raw = state.get("raw_log", "")
     structured = _get_agent("ingestor").ingest_log(raw)
     if "error" in structured:
@@ -121,7 +160,7 @@ def ingestion_node(state: AgentState) -> dict:
 
 
 def threat_analysis_node(state: AgentState) -> dict:
-    print("[Node] Analyzing Threats...")
+    logger.debug("[Node] Analyzing Threats...")
     if state.get("pipeline_error"):
         return {"history": ["[SKIP] Threat analysis skipped due to upstream error"]}
     analysis = _get_agent("threat_analyst").analyze(state.get("structured_log", {}))
@@ -138,7 +177,7 @@ def memory_guard_pre_node(state: AgentState) -> dict:
     as input to the Coordination Intelligence Engine.
     Does NOT store the trace — that is memory_guard_post_node's job.
     """
-    print("[Node] MemoryGuard Pre-Validation...")
+    logger.debug("[Node] MemoryGuard Pre-Validation...")
     if state.get("pipeline_error"):
         return {"history": ["[SKIP] MG pre-validation skipped due to upstream error"]}
 
@@ -168,7 +207,7 @@ def cie_node(state: AgentState) -> dict:
     Replaces the legacy decision_node. Takes threat_analysis + memory_validation_pre
     + structured_log as inputs; outputs a full CIEOutput.
     """
-    print("[Node] Coordination Intelligence Engine...")
+    logger.debug("[Node] Coordination Intelligence Engine...")
     if state.get("pipeline_error"):
         return {
             "decision": {"decision": "MANUAL_REVIEW", "action": "Pipeline error — human review required"},
@@ -186,9 +225,11 @@ def cie_node(state: AgentState) -> dict:
     conflict  = cie_output["conflict_report"]
     fusion    = cie_output["fusion_result"]
 
-    from config import SETTINGS
+    from config.settings import load_settings
+    SETTINGS = load_settings()
     if state.get("memory_validation_pre", {}).get("quarantine") and SETTINGS.policy_rules.quarantine_action == "QUARANTINE_HOST":
-        _overseer.escalate_quarantine(
+        overseer = _get_agent("escalation")
+        overseer.escalate_quarantine(
             decision={
                 "decision": "QUARANTINE_HOST",
                 "action": "network_isolation",
@@ -227,7 +268,7 @@ def cie_node(state: AgentState) -> dict:
 
 
 def response_node(state: AgentState) -> dict:
-    print("[Node] Executing Response...")
+    logger.debug("[Node] Executing Response...")
     execution = _get_agent("muscle").execute(state.get("decision", {}))
     return {
         "execution_result": execution,
@@ -240,7 +281,7 @@ def manual_review_node(state: AgentState) -> dict:
     ACIF v2 — Routes escalations through HumanEscalationAgent.
     Creates a structured ticket and fires async SIEM notification.
     """
-    print("[Node] HumanEscalationAgent — Creating Ticket...")
+    logger.debug("[Node] HumanEscalationAgent — Creating Ticket...")
     cie_output      = state.get("cie_output", {})
     threat_analysis = state.get("threat_analysis", {})
     structured_log  = state.get("structured_log", {})
@@ -298,7 +339,7 @@ def memory_guard_post_node(state: AgentState) -> dict:
     ACIF v2 — Post-decision MemoryGuard pass.
     Stores the final execution trace (with decision label) in the memory store.
     """
-    print("[Node] Securing Memory (Post-Decision)...")
+    logger.debug("[Node] Securing Memory (Post-Decision)...")
     decision_label = state.get("decision", {}).get("decision", "UNKNOWN")
     risk_score     = state.get("threat_analysis", {}).get("risk_score", 0)
     raw_log        = state.get("raw_log", "")
@@ -325,7 +366,7 @@ def self_learning_node(state: AgentState) -> dict:
     process it through the SelfLearningAgent to update trust weights.
     Normally this node is a no-op unless feedback has been queued.
     """
-    print("[Node] Self-Learning Check...")
+    logger.debug("[Node] Self-Learning Check...")
     feedback = state.get("feedback_event")
     if not feedback:
         return {"history": ["[Self-Learning] No feedback event queued — skipping"]}
@@ -353,7 +394,7 @@ def self_learning_node(state: AgentState) -> dict:
 
 
 def analytics_node(state: AgentState) -> dict:
-    print("[Node] Generating Analytics...")
+    logger.debug("[Node] Generating Analytics...")
     store    = _get_agent("store")
     analyzer = _get_agent("analyzer")
 
@@ -399,7 +440,7 @@ def should_respond(state: AgentState) -> str:
     return "execute_response"
 
 
-# ── 5. Build the Graph ────────────────────────────────────────────────────────
+# ── 5. Build the Graph ────────────────────────────────────────────────────
 
 workflow = StateGraph(AgentState)
 
@@ -445,7 +486,7 @@ ares_app = workflow.compile()
 
 # ── 6. Public Entry Points ────────────────────────────────────────────────────
 
-def run_ares(log_text: str, feedback_event: Optional[Dict[str, Any]] = None) -> dict:
+def run_ares(log_text: str, feedback_event: Optional[Dict[str, Any]] = None, registry=None) -> dict:
     """
     Entry point to run the ARES-Mem ACIF orchestration pipeline.
 
@@ -453,6 +494,7 @@ def run_ares(log_text: str, feedback_event: Optional[Dict[str, Any]] = None) -> 
         log_text:       Raw log string to process.
         feedback_event: Optional analyst feedback dict to inject into the
                         self_learning_node during this pipeline run.
+        registry:       Optional AgentRegistry (injected by FastAPI).
     """
     initial_state: AgentState = {
         "raw_log": log_text,
@@ -489,15 +531,18 @@ def run_ares(log_text: str, feedback_event: Optional[Dict[str, Any]] = None) -> 
 def decision_node(state: AgentState) -> Dict[str, Any]:
     """Legacy decision_node for backwards-compatible test suite execution."""
     from typing import cast
-    from config import SETTINGS
+    from config.settings import load_settings
     from models import Decision
+
+    SETTINGS = load_settings()
 
     validation_flag = state.get("validation_flag", False)
     if validation_flag:
         action_policy = SETTINGS.policy_rules.quarantine_action
         if action_policy == "QUARANTINE_HOST":
             threat_analysis = cast(Dict[str, Any], state.get("threat_analysis")) or {}
-            ticket = _overseer.escalate_quarantine(
+            overseer = _get_agent("escalation")
+            ticket = overseer.escalate_quarantine(
                 decision={
                     "decision": "QUARANTINE_HOST",
                     "action": "network_isolation",
@@ -542,7 +587,8 @@ def human_escalation_node(state: AgentState) -> Dict[str, Any]:
     from models import Decision, ThreatAnalysis
     decision = cast(Decision, state.get("decision"))
     threat_analysis = cast(ThreatAnalysis, state.get("threat_analysis"))
-    result = _overseer.review(
+    overseer = _get_agent("escalation")
+    result = overseer.review(
         decision=decision,
         threat_context=cast(Dict[str, Any], threat_analysis),
     )
@@ -565,16 +611,16 @@ def human_escalation_node(state: AgentState) -> Dict[str, Any]:
 def main():
     test_log = "Suspicious login attempt from unknown IP 10.0.0.5"
     result = run_ares(test_log)
-    print("\n--- Final Execution History ---")
+    logger.info("\n--- Final Execution History ---")
     for event in result.get("history", []):
-        print(f"  - {event}")
+        logger.info(f"  - {event}")
     if "cie_output" in result:
         cie = result["cie_output"]
-        print(f"\n--- CIE Summary ---")
-        print(f"  Decision:     {cie.get('decision', {}).get('decision')}")
-        print(f"  Conflict:     {cie.get('conflict_report', {}).get('conflict_detected')}")
-        print(f"  Fusion:       threat_belief={cie.get('fusion_result', {}).get('threat_belief')}")
-        print(f"  Trust Weights:{cie.get('trust_weights')}")
+        logger.info(f"\n--- CIE Summary ---")
+        logger.info(f"  Decision:     {cie.get('decision', {}).get('decision')}")
+        logger.info(f"  Conflict:     {cie.get('conflict_report', {}).get('conflict_detected')}")
+        logger.info(f"  Fusion:       threat_belief={cie.get('fusion_result', {}).get('threat_belief')}")
+        logger.info(f"  Trust Weights:{cie.get('trust_weights')}")
 
 
 if __name__ == "__main__":

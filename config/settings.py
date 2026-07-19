@@ -14,108 +14,74 @@ Usage:
     threshold = cfg.memory_guard.sem_dist_threshold
 """
 import os
-from types import SimpleNamespace
-from typing import Any, Dict, Optional
+import yaml
+import warnings
+from functools import lru_cache
+from typing import Optional
+from pydantic import BaseModel, Field, ValidationError
 
-# ── Default values (mirror of config/settings.yaml) ──────────────────────────
-# These are the fallback values used when settings.yaml is not present.
-# Keep in sync with config/settings.yaml.
-_DEFAULTS: Dict[str, Any] = {
-    "memory_guard": {
-        "sem_dist_threshold":       0.48,
-        "imp_den_threshold":        0.25,
-        "perplexity_threshold":     1500.0,
-        "perplexity_sem_companion": 0.26,
-        "entropy_soft_threshold":   5.2,
-        "entropy_soft_sem_companion": 0.35,
-    },
-    "decision_agent": {
-        "block_threshold":          80,
-        "escalate_threshold":       60,
-        "escalate_confidence_max":  0.4,
-        "quarantine_threshold":     50,
-        "alert_threshold":          20,
-    },
-    "threat_analysis": {
-        "malicious_ip_score":       30,
-        "privileged_port_score":    15,
-        "critical_severity_score":  10,
-        "multi_sig_bonus_per":      5,
-    },
-    "policy_rules": {
-        "quarantine_action":        "LOG_ONLY",
-        "webhook_url":              "http://localhost:8080/api/webhook/simulate",
-    },
-}
+class MemoryGuardSettings(BaseModel):
+    sem_dist_threshold: float = Field(default=0.41, ge=0.0, le=1.0)
+    imp_den_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
+    perplexity_threshold: float = Field(default=1500.0, ge=0.0)
+    perplexity_sem_companion: float = Field(default=0.40, ge=0.0, le=1.0)
+    entropy_soft_threshold: float = Field(default=5.2, ge=0.0, le=10.0)
+    entropy_soft_sem_companion: float = Field(default=0.35, ge=0.0, le=1.0)
 
-# ── Locate config file ────────────────────────────────────────────────────────
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_CONFIG_PATH = os.path.join(_REPO_ROOT, "config", "settings.yaml")
+class DecisionAgentSettings(BaseModel):
+    block_threshold: int = Field(default=80, ge=0, le=100)
+    escalate_threshold: int = Field(default=60, ge=0, le=100)
+    escalate_confidence_max: float = Field(default=0.4, ge=0.0, le=1.0)
+    quarantine_threshold: int = Field(default=50, ge=0, le=100)
+    alert_threshold: int = Field(default=20, ge=0, le=100)
 
+class ThreatAnalysisSettings(BaseModel):
+    malicious_ip_score: int = Field(default=30, ge=0, le=100)
+    privileged_port_score: int = Field(default=15, ge=0, le=100)
+    critical_severity_score: int = Field(default=10, ge=0, le=100)
+    multi_sig_bonus_per: int = Field(default=5, ge=0, le=50)
 
-def _dict_to_namespace(d: Dict[str, Any]) -> SimpleNamespace:
-    """Recursively convert a nested dict to SimpleNamespace."""
-    ns = SimpleNamespace()
-    for key, value in d.items():
-        if isinstance(value, dict):
-            setattr(ns, key, _dict_to_namespace(value))
-        else:
-            setattr(ns, key, value)
-    return ns
+class PolicyRulesSettings(BaseModel):
+    quarantine_action: str = Field(default="LOG_ONLY", pattern="^(LOG_ONLY|QUARANTINE_HOST)$")
+    webhook_url: str = Field(default="http://localhost:8080/api/webhook/simulate")
 
+class LoggingSettings(BaseModel):
+    level: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
+    format: str = "json"
 
-def load_settings(config_path: Optional[str] = None) -> SimpleNamespace:
-    """
-    Load settings from YAML, falling back to hardcoded defaults.
+class Settings(BaseModel):
+    app_name: str = "ARES-Mem API"
+    version: str = "2.0.0"
+    
+    memory_guard: MemoryGuardSettings = Field(default_factory=MemoryGuardSettings)
+    decision_agent: DecisionAgentSettings = Field(default_factory=DecisionAgentSettings)
+    threat_analysis: ThreatAnalysisSettings = Field(default_factory=ThreatAnalysisSettings)
+    policy_rules: PolicyRulesSettings = Field(default_factory=PolicyRulesSettings)
+    logging: LoggingSettings = Field(default_factory=LoggingSettings)
 
-    Args:
-        config_path: Optional explicit path to a settings YAML file.
-                     If None, reads ARES_CONFIG_PATH env var, then
-                     falls back to config/settings.yaml in the repo root.
-
-    Returns:
-        SimpleNamespace with nested namespaces: .memory_guard, .decision_agent,
-        .threat_analysis. Access thresholds as attributes, e.g.:
-            cfg.memory_guard.sem_dist_threshold
-    """
-    resolved_path = (
-        config_path
-        or os.environ.get("ARES_CONFIG_PATH")
-        or _DEFAULT_CONFIG_PATH
-    )
-
-    merged = {section: dict(values) for section, values in _DEFAULTS.items()}
-
-    if os.path.isfile(resolved_path):
+@lru_cache(maxsize=1)
+def load_settings() -> Settings:
+    """Load and validate settings from YAML."""
+    config_path = os.environ.get("ARES_CONFIG_PATH")
+    
+    if not config_path:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(base_dir, "settings.yaml")
+        
+    resolved_path = os.path.abspath(config_path)
+    
+    if os.path.exists(resolved_path):
         try:
-            import yaml  # PyYAML — listed in requirements.txt
             with open(resolved_path, "r", encoding="utf-8") as fh:
                 file_cfg = yaml.safe_load(fh) or {}
-            # Deep merge: YAML values override defaults section by section
-            for section, values in file_cfg.items():
-                if isinstance(values, dict):
-                    merged.setdefault(section, {})
-                    merged[section].update(values)
+                return Settings(**file_cfg)
+        except ValidationError as exc:
+            raise ValueError(f"Configuration validation failed in {resolved_path}:\n{exc}")
         except Exception as exc:
-            import warnings
-            warnings.warn(
-                f"[ARES-Mem] Failed to load config from {resolved_path}: {exc}. "
-                "Using hardcoded defaults.",
-                stacklevel=2,
-            )
+            warnings.warn(f"[ARES-Mem] Failed to load config from {resolved_path}: {exc}. Using defaults.", stacklevel=2)
     else:
-        import warnings
-        warnings.warn(
-            f"[ARES-Mem] Config file not found at {resolved_path}. "
-            "Using hardcoded defaults. Create config/settings.yaml to customise.",
-            stacklevel=2,
-        )
+        warnings.warn(f"[ARES-Mem] Config file not found at {resolved_path}. Using defaults.", stacklevel=2)
+        
+    return Settings()
 
-    return _dict_to_namespace(merged)
-
-
-# ── Module-level singleton (loaded once) ──────────────────────────────────────
-# Import and use this directly for zero-overhead repeated access:
-#   from config.settings import SETTINGS
-#   threshold = SETTINGS.memory_guard.sem_dist_threshold
 SETTINGS = load_settings()

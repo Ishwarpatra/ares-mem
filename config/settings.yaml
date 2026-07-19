@@ -52,3 +52,10 @@ policy_rules:
   # Options: LOG_ONLY (safe default) | QUARANTINE_HOST (active isolation response)
   quarantine_action: "LOG_ONLY"
   webhook_url: "http://localhost:8080/api/webhook/simulate"
+
+logging:
+  level: "INFO"
+  format: "json"
+
+app_name: "ARES-Mem API"
+version: "2.0.0"
