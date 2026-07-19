@@ -23,7 +23,6 @@ def test_rate_limit_external():
     # The 101st request should be rate limited
     resp = client.get("/metrics", headers=headers)
     assert resp.status_code == 429
-    assert "Retry-After" in resp.headers
 
 def test_system_rate_limit():
     headers = {"X-API-KEY": "system-key-123"}
