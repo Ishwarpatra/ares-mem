@@ -22,6 +22,8 @@ import logging
 import os
 import secrets
 import sys
+import yaml
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, List
 from uuid import uuid4
@@ -44,6 +46,7 @@ from self_learning_agent import (
     VERDICT_CONFIRMED, VERDICT_FALSE_POS, VERDICT_MISSED, VERDICT_BENIGN,
 )
 from models import ErrorResponse, SuccessResponse
+from config.settings import SETTINGS, Settings, load_settings
 
 class JSONFormatter(logging.Formatter):
     """Outputs structured JSON logs"""
@@ -57,8 +60,20 @@ class JSONFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno
         }
+        from src.tracing import tracer
+        request_id = tracer.get_id()
+        if request_id:
+            log_obj["request_id"] = request_id
+            
         if record.exc_info:
             log_obj["exception"] = self.formatException(record.exc_info)
+            
+        # Incorporate any extra kwargs passed to logger
+        for key, value in record.__dict__.items():
+            if key not in ["args", "asctime", "created", "exc_info", "exc_text", "filename", "funcName", "levelname", "levelno", "lineno", "message", "module", "msecs", "msg", "name", "pathname", "process", "processName", "relativeCreated", "stack_info", "thread", "threadName", "taskName"]:
+                if key not in log_obj:
+                    log_obj[key] = value
+                    
         return json.dumps(log_obj)
 
 def setup_logging(level: str = "INFO"):
@@ -90,11 +105,77 @@ app = FastAPI(
     version="2.0.0",
 )
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+def get_api_key_or_ip(request: Request) -> str:
+    api_key = request.headers.get("X-API-KEY")
+    return api_key if api_key else get_remote_address(request)
+
+limiter = Limiter(key_func=get_api_key_or_ip)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+def get_rate_limit() -> str:
+    tier = API_TIER_CTX.get()
+    if tier == "system":
+        return "10000/hour"
+    elif tier == "internal":
+        return "1000/hour"
+    return "100/hour"
+
+from fastapi import Request, Response
+from fastapi.responses import JSONResponse
+from src.tracing import tracer
+import uuid
+from contextvars import ContextVar
+
+API_TIER_CTX: ContextVar[str] = ContextVar("api_tier", default="external")
+
+@app.middleware("http")
+async def add_request_tracing_middleware(request: Request, call_next):
+    """
+    Add request ID to every HTTP request for tracing.
+    If X-Request-ID header provided, use it. Otherwise generate new UUID.
+    """
+    # Extract or generate request ID
+    request_id = request.headers.get("X-Request-ID")
+    if not request_id:
+        request_id = str(uuid.uuid4())
+    
+    # Set in context for access in handlers
+    tracer.set_id(request_id)
+    
+    # Add to request state
+    request.state.request_id = request_id
+    
+    api_key = request.headers.get("X-API-KEY")
+    if api_key:
+        tier = _API_KEYS.get(api_key, {}).get("source", "external")
+        API_TIER_CTX.set(tier)
+    else:
+        API_TIER_CTX.set("external")
+        
+    # Process request
+    response = await call_next(request)
+    
+    # Add request ID to response headers
+    response.headers["X-Request-ID"] = request_id
+    
+    return response
+
 @app.on_event("startup")
 async def startup_event():
     from config.settings import load_settings
     settings = load_settings()
     setup_logging(settings.logging.level)
+    
+    # Initialize audit logger
+    from src.audit_logger import init_audit_logger
+    store = get_agent_registry().get_agent("store")
+    init_audit_logger(store)
+    
     logger.info(f"Starting {settings.app_name} v{settings.version}")
 
 @app.exception_handler(ValueError)
@@ -189,7 +270,9 @@ class HealthCheck(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/ingest", response_model=SuccessResponse[IngestResponse], tags=["Pipeline"])
+@limiter.limit(get_rate_limit)
 def ingest(
+    request: Request,
     body: IngestRequest, 
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
@@ -246,7 +329,9 @@ def ingest(
 
 
 @app.get("/metrics", response_model=SuccessResponse[Dict], tags=["Monitoring"])
+@limiter.limit(get_rate_limit)
 def metrics(
+    request: Request,
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
 ):
@@ -334,7 +419,9 @@ def list_quarantine(
 
 
 @app.post("/resolve", response_model=SuccessResponse[Dict], tags=["Escalations"])
+@limiter.limit(get_rate_limit)
 def resolve_ticket(
+    request: Request,
     body: ResolveRequest, 
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
@@ -358,6 +445,27 @@ def resolve_ticket(
                 "analyst_note": body.analyst_note or "",
             }],
         )
+        from src.audit_logger import get_audit_logger, AuditEventType
+        logger_instance = get_audit_logger()
+        if logger_instance:
+            try:
+                request_id = getattr(getattr(auth, "request", None), "state", None)
+                req_id_str = request_id.request_id if request_id and hasattr(request_id, "request_id") else None
+                logger_instance.log_event(
+                    event_type=AuditEventType.ESCALATION_APPROVED if action == "approve" else AuditEventType.ESCALATION_DENIED,
+                    actor=auth.get("source", "system"),
+                    resource_id=body.ticket_id,
+                    action="escalation_resolved",
+                    details={
+                        "operator_decision": action,
+                        "analyst_note": body.analyst_note or "",
+                    },
+                    outcome="success",
+                    request_id=req_id_str,
+                )
+            except Exception as exc:
+                logger.error(f"Audit log failed in /resolve: {exc}")
+
         return SuccessResponse(data={
             "ticket_id":  body.ticket_id,
             "new_status": new_status,
@@ -369,7 +477,9 @@ def resolve_ticket(
 
 
 @app.post("/feedback", response_model=SuccessResponse[Dict], tags=["Self-Learning"])
+@limiter.limit(get_rate_limit)
 def submit_feedback(
+    request: Request,
     body: FeedbackRequest, 
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
@@ -393,9 +503,79 @@ def submit_feedback(
         logger.error(f"[/feedback] {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
+@app.get("/audit/events", tags=["Compliance"])
+@limiter.limit(get_rate_limit)
+def get_audit_events(
+    request: Request,
+    auth: Dict = Depends(verify_api_key),
+    event_type: Optional[str] = None,
+    actor: Optional[str] = None,
+    resource_id: Optional[str] = None,
+    limit: int = 100,
+):
+    """
+    Query immutable audit trail.
+    Requires: internal or system tier API key.
+    """
+    if auth["source"] not in ("system", "internal"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions for audit access")
+    
+    if limit > 1000:
+        limit = 1000
+    
+    store = _get_agent("store")
+    
+    try:
+        # Build where filter
+        where_filter = {}
+        if event_type:
+            where_filter["event_type"] = {"$eq": event_type}
+        if actor:
+            where_filter["actor"] = {"$eq": actor}
+        if resource_id:
+            where_filter["resource_id"] = {"$eq": resource_id}
+        
+        # Query
+        where_clause = where_filter if where_filter else None
+        results = store.audit_events.get(
+            where=where_clause,
+            limit=limit,
+        )
+        
+        # Parse events
+        events = []
+        for doc, meta in zip(
+            results.get("documents", []),
+            results.get("metadatas", [])
+        ):
+            try:
+                event = json.loads(doc)
+                # Merge metadata
+                event_obj = {**event, **meta}
+                events.append(event_obj)
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse audit event document")
+        
+        return JSONResponse({
+            "events": events,
+            "total": len(events),
+            "query": {
+                "event_type": event_type,
+                "actor": actor,
+                "resource_id": resource_id,
+                "limit": limit,
+            },
+        })
+    
+    except Exception as e:
+        logger.error(f"Audit query failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to query audit trail")
+
 
 @app.get("/explain/{event_id}", response_model=SuccessResponse[Dict], tags=["Explainability"])
+@limiter.limit(get_rate_limit)
 def explain_event(
+    request: Request,
     event_id: str, 
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
@@ -942,8 +1122,61 @@ def get_api_metrics(
 
 # ── Dev server entry ──────────────────────────────────────────────────────────
 
+# ==============================================================================
+# SETTINGS MANAGEMENT ENDPOINTS (Task 6)
+# ==============================================================================
+
+@app.get("/settings", response_model=SuccessResponse[Settings], tags=["Settings"])
+@limiter.limit(get_rate_limit)
+def get_settings(request: Request, auth: Dict = Depends(verify_api_key)):
+    """Retrieve current system settings."""
+    # Ensure we return the latest state
+    current_settings = load_settings()
+    return SuccessResponse(data=current_settings)
+
+@app.patch("/settings", response_model=SuccessResponse[Settings], tags=["Settings"])
+@limiter.limit(get_rate_limit)
+def update_settings(
+    request: Request,
+    updates: Dict[str, Any],
+    auth: Dict = Depends(verify_api_key)
+):
+    """Patch update system settings and save to YAML."""
+    try:
+        current_settings = load_settings()
+        current_dict = current_settings.model_dump()
+        
+        # Merge updates at the top level dicts
+        for key, value in updates.items():
+            if key in current_dict and isinstance(current_dict[key], dict) and isinstance(value, dict):
+                current_dict[key].update(value)
+            else:
+                current_dict[key] = value
+                
+        # Validate through Pydantic
+        new_settings = Settings(**current_dict)
+        
+        # Save to YAML
+        config_path = os.environ.get("ARES_CONFIG_PATH")
+        if not config_path:
+            base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, '..', 'config')))
+            config_path = os.path.join(base_dir, "config", "settings.yaml")
+            
+        # Write file
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(new_settings.model_dump(), fh, sort_keys=False)
+            
+        # Update in-memory singleton
+        from config.settings import load_settings as fresh_load
+        import config.settings
+        config.settings.load_settings.cache_clear()
+        config.settings.SETTINGS = fresh_load()
+        
+        return SuccessResponse(data=config.settings.SETTINGS)
+    except Exception as e:
+        logger.error(f"Failed to update settings: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid settings payload: {e}")
+
 if __name__ == "__main__":
-    import sys
-    port = int(os.getenv("PORT", 8080))
-    sys.path.insert(0, _SRC_DIR)
-    uvicorn.run("service:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("service:app", host="0.0.0.0", port=8000, reload=True)

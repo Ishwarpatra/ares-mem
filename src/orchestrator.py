@@ -44,6 +44,9 @@ handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(handler)
 
+from src.audit_logger import get_audit_logger, AuditEventType
+from src.notifications import get_notification_service
+
 
 # ── 1. Shared State Schema ────────────────────────────────────────────────────
 
@@ -57,6 +60,7 @@ class AgentState(TypedDict, total=False):
     memory_validation:  Dict[str, Any]     # post-decision MemoryGuard trace
     history:            Annotated[List[str], operator.add]
     pipeline_error:     Optional[str]
+    request_id:         Optional[str]
 
     # ACIF v2 — new fields (additive only; total=False so no breaking changes)
     memory_validation_pre: Dict[str, Any]  # pre-CIE MemoryGuard tag (CIE input)
@@ -225,6 +229,26 @@ def cie_node(state: AgentState) -> dict:
     conflict  = cie_output["conflict_report"]
     fusion    = cie_output["fusion_result"]
 
+    logger_instance = get_audit_logger()
+    if logger_instance:
+        try:
+            logger_instance.log_event(
+                event_type=AuditEventType.DECISION_MADE,
+                actor=state.get("api_source", "system"),
+                resource_id=cie_output.get("event_id", ""),
+                action=decision.get("decision", "UNKNOWN"),
+                details={
+                    "risk_score": state.get("threat_analysis", {}).get("risk_score", 0),
+                    "confidence": state.get("threat_analysis", {}).get("confidence", 0),
+                    "threat_belief": fusion.get("threat_belief", 0),
+                    "conflict_detected": conflict.get("conflict_detected", False),
+                },
+                outcome="success",
+                request_id=state.get("request_id"),
+            )
+        except Exception as e:
+            logger.error(f"Audit logging failed: {e}")
+
     from config.settings import load_settings
     SETTINGS = load_settings()
     if state.get("memory_validation_pre", {}).get("quarantine") and SETTINGS.policy_rules.quarantine_action == "QUARANTINE_HOST":
@@ -257,6 +281,7 @@ def cie_node(state: AgentState) -> dict:
     return {
         "decision":   decision,
         "cie_output": cie_output,
+        "request_id": state.get("request_id"),
         "history": [
             f"CIE decision: {decision.get('decision')} | "
             f"priority={decision.get('priority')} | "
@@ -269,7 +294,18 @@ def cie_node(state: AgentState) -> dict:
 
 def response_node(state: AgentState) -> dict:
     logger.debug("[Node] Executing Response...")
-    execution = _get_agent("muscle").execute(state.get("decision", {}))
+    decision = state.get("decision", {})
+    execution = _get_agent("muscle").execute(decision)
+    
+    if decision.get("decision") == "ALERT":
+        alert_data = {
+            "event_id": state.get("cie_output", {}).get("event_id"),
+            "risk_score": state.get("threat_analysis", {}).get("risk_score"),
+            "action": decision.get("action"),
+            "details": decision.get("rationale", "")
+        }
+        get_notification_service().notify_alert_sync(alert_data)
+        
     return {
         "execution_result": execution,
         "history":          [f"Response executed: {execution.get('action')} → {execution.get('status')}"],
@@ -353,6 +389,22 @@ def memory_guard_post_node(state: AgentState) -> dict:
     store      = _get_agent("store")
     validation = guard.validate_trace(trace)
     store.add_memory(validation)
+    
+    logger_instance = get_audit_logger()
+    if logger_instance:
+        try:
+            logger_instance.log_event(
+                event_type=AuditEventType.DECISION_MADE,
+                actor=state.get("api_source", "system"),
+                resource_id=state.get("request_id", "unknown"),
+                action="trace_stored",
+                details={"trust_tier": validation.get("trust_tier")},
+                outcome="success",
+                request_id=state.get("request_id"),
+            )
+        except Exception as e:
+            logger.error(f"Audit logging failed: {e}")
+
     return {
         "memory_validation": validation,
         "history":           [f"Trace stored — trust tier: {validation['trust_tier']}"],
@@ -380,6 +432,24 @@ def self_learning_node(state: AgentState) -> dict:
             trace_id=feedback.get("trace_id"),
             analyst_note=feedback.get("analyst_note"),
         )
+        if audit_logger:
+            try:
+                audit_logger.log_event(
+                    event_type=AuditEventType.FEEDBACK_SUBMITTED,
+                    actor=state.get("api_source", "system"),
+                    resource_id=feedback.get("event_id", ""),
+                    action="feedback_processed",
+                    details={
+                        "analyst_verdict": result.get("analyst_verdict"),
+                        "threat_outcome": result.get("threat_outcome"),
+                        "mg_outcome": result.get("mg_outcome"),
+                    },
+                    outcome="success",
+                    request_id=state.get("request_id"),
+                )
+            except Exception as e:
+                logger.error(f"Audit logging failed: {e}")
+
         return {
             "history": [
                 f"[Self-Learning] Feedback processed: "
@@ -486,19 +556,27 @@ ares_app = workflow.compile()
 
 # ── 6. Public Entry Points ────────────────────────────────────────────────────
 
-def run_ares(log_text: str, feedback_event: Optional[Dict[str, Any]] = None, registry=None) -> dict:
+def run_ares(
+    log_text: str, 
+    feedback_event: Optional[Dict] = None, 
+    api_source: str = "system",
+    registry: Optional[AgentRegistry] = None
+) -> dict:
     """
-    Entry point to run the ARES-Mem ACIF orchestration pipeline.
-
-    Args:
-        log_text:       Raw log string to process.
-        feedback_event: Optional analyst feedback dict to inject into the
-                        self_learning_node during this pipeline run.
-        registry:       Optional AgentRegistry (injected by FastAPI).
+    Main entry point for ARES.
+    Now requires the AgentRegistry to be injected.
     """
-    initial_state: AgentState = {
+    global _agent_registry
+    if registry:
+        _agent_registry = registry
+        
+    from src.tracing import tracer
+    
+    initial_state = {
         "raw_log": log_text,
         "history": [],
+        "api_source": api_source,
+        "request_id": tracer.get_id(),
     }
     if feedback_event:
         initial_state["feedback_event"] = feedback_event  # type: ignore[assignment]
@@ -593,6 +671,25 @@ def human_escalation_node(state: AgentState) -> Dict[str, Any]:
         threat_context=cast(Dict[str, Any], threat_analysis),
     )
     ticket = result.get("escalation_ticket", {})
+    
+    logger_instance = get_audit_logger()
+    if logger_instance:
+        try:
+            logger_instance.log_event(
+                event_type=AuditEventType.ESCALATION_APPROVED if result.get("approved") else AuditEventType.ESCALATION_DENIED,
+                actor=state.get("api_source", "system"),
+                resource_id=ticket.get("ticket_id", ""),
+                action="escalation_resolved",
+                details={
+                    "operator_decision": result.get("operator_decision", ""),
+                    "analyst_note": result.get("analyst_note", ""),
+                },
+                outcome="success",
+                request_id=state.get("request_id"),
+            )
+        except Exception as e:
+            logger.error(f"Audit logging failed: {e}")
+
     overridden_decision: Decision = cast(Decision, {
         **cast(dict, state.get("decision", {})),
         "decision": result.get("operator_decision", "ALERT"),
