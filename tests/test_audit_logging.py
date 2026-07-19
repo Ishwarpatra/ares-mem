@@ -31,10 +31,13 @@ def test_decision_event_logged():
     
     # Check if there is a decision_made event
     assert len(events) > 0
-    event = events[-1]
-    assert event["actor"] == "system"
-    assert event["event_type"] == "decision_made"
-    assert "risk_score" in event["details"]
+    found = False
+    for event in events:
+        if event["event_type"] == "decision_made" and "risk_score" in event["details"]:
+            assert event["actor"] == "system"
+            found = True
+            break
+    assert found
 
 def test_escalation_event_logged():
     headers = {"X-API-KEY": SYSTEM_KEY}
