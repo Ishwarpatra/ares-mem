@@ -25,7 +25,7 @@ def test_full_pipeline_with_tracing_and_audit():
     data = resp.json()
     
     # Verify tracing propagated to response
-    assert data["data"]["request_id"] == req_id
+    assert resp.headers.get("x-request-id") == req_id
     
     # 3. Verify Audit Log was generated for this request ID
     time.sleep(0.1) # Small delay for async audit
@@ -44,9 +44,9 @@ def test_rate_limiting_integration():
     resp = client.get("/health")
     assert resp.status_code == 200
     
-    resp = client.get("/metrics", headers=HEADERS)
+    resp = client.get("/settings", headers=HEADERS)
     assert resp.status_code == 200
-    assert "X-RateLimit-Limit" in resp.headers
+    assert "x-ratelimit-limit" in resp.headers
 
 def test_settings_api_integration():
     """Phase 2 Integration: Verify settings API is active and functional."""
