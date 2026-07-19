@@ -22,6 +22,8 @@ import logging
 import os
 import secrets
 import sys
+import yaml
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, List
 from uuid import uuid4
@@ -44,6 +46,7 @@ from self_learning_agent import (
     VERDICT_CONFIRMED, VERDICT_FALSE_POS, VERDICT_MISSED, VERDICT_BENIGN,
 )
 from models import ErrorResponse, SuccessResponse
+from config.settings import SETTINGS, Settings, load_settings
 
 class JSONFormatter(logging.Formatter):
     """Outputs structured JSON logs"""
@@ -1119,8 +1122,61 @@ def get_api_metrics(
 
 # ── Dev server entry ──────────────────────────────────────────────────────────
 
+# ==============================================================================
+# SETTINGS MANAGEMENT ENDPOINTS (Task 6)
+# ==============================================================================
+
+@app.get("/settings", response_model=SuccessResponse[Settings], tags=["Settings"])
+@limiter.limit(get_rate_limit)
+def get_settings(request: Request, auth: Dict = Depends(verify_api_key)):
+    """Retrieve current system settings."""
+    # Ensure we return the latest state
+    current_settings = load_settings()
+    return SuccessResponse(data=current_settings)
+
+@app.patch("/settings", response_model=SuccessResponse[Settings], tags=["Settings"])
+@limiter.limit(get_rate_limit)
+def update_settings(
+    request: Request,
+    updates: Dict[str, Any],
+    auth: Dict = Depends(verify_api_key)
+):
+    """Patch update system settings and save to YAML."""
+    try:
+        current_settings = load_settings()
+        current_dict = current_settings.model_dump()
+        
+        # Merge updates at the top level dicts
+        for key, value in updates.items():
+            if key in current_dict and isinstance(current_dict[key], dict) and isinstance(value, dict):
+                current_dict[key].update(value)
+            else:
+                current_dict[key] = value
+                
+        # Validate through Pydantic
+        new_settings = Settings(**current_dict)
+        
+        # Save to YAML
+        config_path = os.environ.get("ARES_CONFIG_PATH")
+        if not config_path:
+            base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, '..', 'config')))
+            config_path = os.path.join(base_dir, "config", "settings.yaml")
+            
+        # Write file
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(new_settings.model_dump(), fh, sort_keys=False)
+            
+        # Update in-memory singleton
+        from config.settings import load_settings as fresh_load
+        import config.settings
+        config.settings.load_settings.cache_clear()
+        config.settings.SETTINGS = fresh_load()
+        
+        return SuccessResponse(data=config.settings.SETTINGS)
+    except Exception as e:
+        logger.error(f"Failed to update settings: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid settings payload: {e}")
+
 if __name__ == "__main__":
-    import sys
-    port = int(os.getenv("PORT", 8080))
-    sys.path.insert(0, _SRC_DIR)
-    uvicorn.run("service:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("service:app", host="0.0.0.0", port=8000, reload=True)
