@@ -24,6 +24,7 @@ pandas>=2.2.0
 
 # Configuration & Environment
 python-dotenv>=1.0.1
+slowapi>=0.1.9
 
 # Testing & Engineering Standards
 pytest>=8.0.0

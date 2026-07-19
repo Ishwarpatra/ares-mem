@@ -102,6 +102,28 @@ app = FastAPI(
     version="2.0.0",
 )
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+def get_api_key_or_ip(request: Request) -> str:
+    api_key = request.headers.get("X-API-KEY")
+    return api_key if api_key else get_remote_address(request)
+
+limiter = Limiter(key_func=get_api_key_or_ip)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+def get_rate_limit(request: Request) -> str:
+    api_key = request.headers.get("X-API-KEY")
+    if api_key:
+        tier = _API_KEYS.get(api_key, {}).get("source", "external")
+        if tier == "system":
+            return "10000/hour"
+        elif tier == "internal":
+            return "1000/hour"
+    return "100/hour"
+
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from src.tracing import tracer
@@ -237,7 +259,9 @@ class HealthCheck(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/ingest", response_model=SuccessResponse[IngestResponse], tags=["Pipeline"])
+@limiter.limit(get_rate_limit)
 def ingest(
+    request: Request,
     body: IngestRequest, 
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
@@ -294,7 +318,9 @@ def ingest(
 
 
 @app.get("/metrics", response_model=SuccessResponse[Dict], tags=["Monitoring"])
+@limiter.limit(get_rate_limit)
 def metrics(
+    request: Request,
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
 ):
@@ -382,7 +408,9 @@ def list_quarantine(
 
 
 @app.post("/resolve", response_model=SuccessResponse[Dict], tags=["Escalations"])
+@limiter.limit(get_rate_limit)
 def resolve_ticket(
+    request: Request,
     body: ResolveRequest, 
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
@@ -438,7 +466,9 @@ def resolve_ticket(
 
 
 @app.post("/feedback", response_model=SuccessResponse[Dict], tags=["Self-Learning"])
+@limiter.limit(get_rate_limit)
 def submit_feedback(
+    request: Request,
     body: FeedbackRequest, 
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
@@ -463,7 +493,9 @@ def submit_feedback(
         raise HTTPException(status_code=500, detail=str(exc))
 
 @app.get("/audit/events", tags=["Compliance"])
+@limiter.limit(get_rate_limit)
 def get_audit_events(
+    request: Request,
     auth: Dict = Depends(verify_api_key),
     event_type: Optional[str] = None,
     actor: Optional[str] = None,
@@ -530,7 +562,9 @@ def get_audit_events(
 
 
 @app.get("/explain/{event_id}", response_model=SuccessResponse[Dict], tags=["Explainability"])
+@limiter.limit(get_rate_limit)
 def explain_event(
+    request: Request,
     event_id: str, 
     auth: Dict = Depends(verify_api_key),
     registry: AgentRegistry = Depends(get_agent_registry)
