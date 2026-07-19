@@ -8,7 +8,7 @@ client = TestClient(app)
 
 @pytest.fixture
 def auth_headers():
-    return {"Authorization": "Bearer internal-service-key-991"}
+    return {"X-API-KEY": "internal-service-key-991"}
 
 def test_get_settings(auth_headers):
     response = client.get("/settings", headers=auth_headers)
