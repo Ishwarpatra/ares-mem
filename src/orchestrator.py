@@ -45,6 +45,7 @@ handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s -
 logger.addHandler(handler)
 
 from src.audit_logger import get_audit_logger, AuditEventType
+from src.notifications import get_notification_service
 
 
 # ── 1. Shared State Schema ────────────────────────────────────────────────────
@@ -293,7 +294,18 @@ def cie_node(state: AgentState) -> dict:
 
 def response_node(state: AgentState) -> dict:
     logger.debug("[Node] Executing Response...")
-    execution = _get_agent("muscle").execute(state.get("decision", {}))
+    decision = state.get("decision", {})
+    execution = _get_agent("muscle").execute(decision)
+    
+    if decision.get("decision") == "ALERT":
+        alert_data = {
+            "event_id": state.get("cie_output", {}).get("event_id"),
+            "risk_score": state.get("threat_analysis", {}).get("risk_score"),
+            "action": decision.get("action"),
+            "details": decision.get("rationale", "")
+        }
+        get_notification_service().notify_alert_sync(alert_data)
+        
     return {
         "execution_result": execution,
         "history":          [f"Response executed: {execution.get('action')} → {execution.get('status')}"],

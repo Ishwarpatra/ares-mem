@@ -25,6 +25,8 @@ pandas>=2.2.0
 # Configuration & Environment
 python-dotenv>=1.0.1
 slowapi>=0.1.9
+aiohttp>=3.9.0
+slack-sdk>=3.20.0
 
 # Testing & Engineering Standards
 pytest>=8.0.0
