@@ -61,4 +61,4 @@ def test_patch_settings_invalid(auth_headers):
     }
     response = client.patch("/settings", headers=auth_headers, json=payload)
     assert response.status_code == 400
-    assert "Validation" in response.json()["detail"] or "Invalid settings payload" in response.json()["detail"]
+    assert "Validation" in response.json()["message"] or "Invalid settings payload" in response.json()["message"]
